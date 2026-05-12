@@ -4,7 +4,7 @@ Strateji: Sinyal üretimi ve filtre kontrolü.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Optional
 
 import pandas as pd
 
@@ -20,7 +20,7 @@ class SignalResult:
     side: Optional[str] = None             # "long" / "short" / None
     crossover_happened: bool = False       # RSI cross gerçekleşti mi?
     crossover_side: Optional[str] = None   # cross yönü
-    rejection_reason: Optional[str] = None # filtreye takılma sebebi (kullanıcıya gösterilir)
+    rejection_reason: Optional[str] = None # filtreye takılma sebebi
 
     # Debug / bilgi için
     last_close: float = 0.0
@@ -97,7 +97,6 @@ def evaluate_symbol(
     short_cross = indicators.rsi_cross_down(rsi_series, short_th)
 
     if not long_cross and not short_cross:
-        # Crossover yok - sessizce geç
         result.rejection_reason = "RSI crossover yok"
         return result
 
@@ -106,7 +105,6 @@ def evaluate_symbol(
         result.crossover_happened = True
         result.crossover_side = "long"
 
-        # Filtreler sırayla
         if last_close <= last_ema30:
             result.rejection_reason = (
                 f"30dk EMA200 altında "
@@ -125,7 +123,6 @@ def evaluate_symbol(
             )
             return result
 
-        # Tüm filtreler geçti
         result.has_signal = True
         result.side = "long"
         return result
@@ -160,32 +157,22 @@ def evaluate_symbol(
     return result
 
 
-def compute_initial_ce(
-    df_30m: pd.DataFrame,
-    side: str,
-) -> float:
-    """
-    Giriş anındaki Chandelier Exit başlangıç seviyesi (1 ATR geride).
-    """
-    atr_series = indicators.atr(
-        df_30m["high"], df_30m["low"], df_30m["close"], config.ATR_PERIOD
-    )
-    if side == "long":
-        return indicators.chandelier_exit_long(
-            df_30m["high"], atr_series,
-            config.CE_PERIOD, config.CE_INITIAL_MULTIPLIER,
-        )
-    else:
-        return indicators.chandelier_exit_short(
-            df_30m["low"], atr_series,
-            config.CE_PERIOD, config.CE_INITIAL_MULTIPLIER,
-        )
-
-
 def compute_entry_atr(df_30m: pd.DataFrame) -> float:
-    """Giriş anındaki ATR değeri (kâr seviyelerinin hesabı için)."""
+    """Giriş anındaki ATR değeri (CE ve BE seviyelerinin hesabı için)."""
     atr_series = indicators.atr(
         df_30m["high"], df_30m["low"], df_30m["close"], config.ATR_PERIOD
     )
     val = atr_series.iloc[-1]
     return float(val) if not pd.isna(val) else 0.0
+
+
+def compute_initial_ce(side: str, entry_price: float, entry_atr: float) -> float:
+    """
+    Giriş anındaki Chandelier Exit seviyesi.
+    Her zaman giriş fiyatının 1 ATR gerisinde başlar.
+      Long: entry - 1×ATR
+      Short: entry + 1×ATR
+    """
+    if side == "long":
+        return entry_price - config.CE_INITIAL_MULTIPLIER * entry_atr
+    return entry_price + config.CE_INITIAL_MULTIPLIER * entry_atr
