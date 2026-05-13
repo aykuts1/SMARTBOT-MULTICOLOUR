@@ -76,6 +76,7 @@ EXIT_SCAN_INTERVAL_SEC: int = 60
 HTTP_TIMEOUT: int = 30
 RETRY_ATTEMPTS: int = 3
 RETRY_DELAY: int = 2
+SCAN_SLEEP_BETWEEN_SYMBOLS: float = 0.3
 
 
 def validate() -> None:
