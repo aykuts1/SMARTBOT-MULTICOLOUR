@@ -1,180 +1,136 @@
 """
-Strateji: Sinyal üretimi ve filtre kontrolü.
+Strategy module - generates entry signals from indicator values.
 
-Filtreler:
-1. RSI crossover (dinamik eşik)
-2. 48 mum öncesi + 0.5 ATR mesafe (trend yön filtresi)
-3. ATR oranı ≥ 0.7 (volatilite filtresi)
+Long signal (5min candle close):
+  - EMA7(close) > EMA100(high)  on the just-closed candle
+  - channel_width > avg(channel_width, 100)
+
+Short signal:
+  - EMA7(close) < EMA100(low)
+  - channel_width > avg(channel_width, 100)
 """
-from __future__ import annotations
-
+from typing import Optional, Dict, List
 from dataclasses import dataclass
-from typing import Optional
 
-import pandas as pd
-
-import config
 import indicators
+import config
 
 
 @dataclass
-class SignalResult:
-    """Tarama sonucu: sinyal ya da hangi filtreye takıldığı bilgisi."""
+class Signal:
+    side: str           # "Buy" or "Sell"
     symbol: str
-    has_signal: bool = False
-    side: Optional[str] = None
-    crossover_happened: bool = False
-    crossover_side: Optional[str] = None
-    rejection_reason: Optional[str] = None
-
-    # Debug / bilgi için
-    last_close: float = 0.0
-    rsi_value: float = 0.0
-    rsi_long_th: float = 0.0
-    rsi_short_th: float = 0.0
-    atr_value: float = 0.0
-    atr_ratio_value: float = 0.0
-    trend_ref_price: float = 0.0     # 48 mum önceki kapanış
+    entry_price: float  # close of signal candle
+    atr: float          # ATR at signal candle
+    ema_high: float
+    ema_low: float
+    ema_trigger: float
+    channel_width: float
+    channel_width_avg: float
 
 
-def evaluate_symbol(
-    df_30m: pd.DataFrame,
-    symbol: str,
-) -> SignalResult:
+def evaluate_entry(symbol: str, klines: List[Dict]) -> Optional[Signal]:
     """
-    Sembol için sinyal değerlendir.
+    Evaluate the just-closed candle.
+    Returns Signal if entry conditions met, else None.
 
-    df_30m: 30 dakikalık kapanan mumlar (en eskiden en yeniye)
+    klines: list of dicts (oldest first) with open/high/low/close.
+    The last element must be a CLOSED candle (caller ensures this).
     """
-    result = SignalResult(symbol=symbol)
-
-    # === Yeterli veri kontrolü ===
-    min_30m = max(
-        config.RSI_LOOKBACK + config.RSI_PERIOD,
-        config.ATR_LOOKBACK + config.ATR_PERIOD,
-        config.TREND_LOOKBACK_BARS + 5,
-    ) + 5
-    if len(df_30m) < min_30m:
-        result.rejection_reason = "Yetersiz veri"
-        return result
-
-    close_30m = df_30m["close"]
-    high_30m = df_30m["high"]
-    low_30m = df_30m["low"]
-
-    # === Göstergeler ===
-    rsi_series = indicators.rsi(close_30m, config.RSI_PERIOD)
-    atr_series = indicators.atr(high_30m, low_30m, close_30m, config.ATR_PERIOD)
-
-    last_close = float(close_30m.iloc[-1])
-    last_rsi = float(rsi_series.iloc[-1])
-    last_atr = float(atr_series.iloc[-1])
-
-    if pd.isna(last_rsi) or pd.isna(last_atr):
-        result.rejection_reason = "Gösterge NaN"
-        return result
-
-    # Dinamik RSI eşikleri
-    long_th, short_th = indicators.dynamic_rsi_thresholds(
-        rsi_series, config.RSI_LOOKBACK, config.RSI_EXTREME_COUNT
-    )
-
-    # ATR oranı
-    atr_r = indicators.atr_ratio(atr_series, config.ATR_LOOKBACK)
-
-    # 48 mum öncesi kapanış (trend referansı)
-    trend_ref = float(close_30m.iloc[-config.TREND_LOOKBACK_BARS - 1])
-
-    # Result'a doldur
-    result.last_close = last_close
-    result.rsi_value = last_rsi
-    result.rsi_long_th = long_th
-    result.rsi_short_th = short_th
-    result.atr_value = last_atr
-    result.atr_ratio_value = atr_r
-    result.trend_ref_price = trend_ref
-
-    # === RSI Crossover Kontrolü ===
-    long_cross = indicators.rsi_cross_up(rsi_series, long_th)
-    short_cross = indicators.rsi_cross_down(rsi_series, short_th)
-
-    if not long_cross and not short_cross:
-        result.rejection_reason = "RSI crossover yok"
-        return result
-
-    # Trend mesafesi (0.5 ATR)
-    distance = config.TREND_ATR_DISTANCE * last_atr
-
-    # === LONG değerlendirme ===
-    if long_cross:
-        result.crossover_happened = True
-        result.crossover_side = "long"
-
-        # Fiyat 48 mum öncesinin 0.5 ATR üstünde olmalı
-        if last_close < trend_ref + distance:
-            result.rejection_reason = (
-                f"24H trend yukarı değil "
-                f"(fiyat {last_close:.6f} < ref {trend_ref:.6f} + {distance:.6f})"
-            )
-            return result
-
-        if atr_r < config.ATR_RATIO_MIN:
-            result.rejection_reason = (
-                f"ATR oranı düşük ({atr_r:.2f} < {config.ATR_RATIO_MIN})"
-            )
-            return result
-
-        result.has_signal = True
-        result.side = "long"
-        return result
-
-    # === SHORT değerlendirme ===
-    if short_cross:
-        result.crossover_happened = True
-        result.crossover_side = "short"
-
-        # Fiyat 48 mum öncesinin 0.5 ATR altında olmalı
-        if last_close > trend_ref - distance:
-            result.rejection_reason = (
-                f"24H trend aşağı değil "
-                f"(fiyat {last_close:.6f} > ref {trend_ref:.6f} - {distance:.6f})"
-            )
-            return result
-
-        if atr_r < config.ATR_RATIO_MIN:
-            result.rejection_reason = (
-                f"ATR oranı düşük ({atr_r:.2f} < {config.ATR_RATIO_MIN})"
-            )
-            return result
-
-        result.has_signal = True
-        result.side = "short"
-        return result
-
-    return result
-
-
-def compute_entry_atr(df_30m: pd.DataFrame) -> float:
-    """Giriş anındaki ATR değeri (CE ve BE seviyelerinin hesabı için)."""
-    atr_series = indicators.atr(
-        df_30m["high"], df_30m["low"], df_30m["close"], config.ATR_PERIOD
-    )
-    val = atr_series.iloc[-1]
-    return float(val) if not pd.isna(val) else 0.0
-
-
-def compute_rsi_and_thresholds(df_30m: pd.DataFrame):
-    """
-    Anlık RSI değerini ve dinamik eşikleri döndür.
-    Returns: (current_rsi, long_threshold, short_threshold) veya None
-    """
-    if len(df_30m) < config.RSI_LOOKBACK + config.RSI_PERIOD + 5:
+    if len(klines) < max(config.EMA_HIGH_PERIOD, config.CHANNEL_AVG_PERIOD) + 5:
         return None
-    rsi_series = indicators.rsi(df_30m["close"], config.RSI_PERIOD)
-    current_rsi = float(rsi_series.iloc[-1])
-    if pd.isna(current_rsi):
-        return None
-    long_th, short_th = indicators.dynamic_rsi_thresholds(
-        rsi_series, config.RSI_LOOKBACK, config.RSI_EXTREME_COUNT
+
+    highs = [k["high"] for k in klines]
+    lows = [k["low"] for k in klines]
+    closes = [k["close"] for k in klines]
+
+    ind = indicators.compute_all_indicators(
+        highs=highs,
+        lows=lows,
+        closes=closes,
+        ema_high_period=config.EMA_HIGH_PERIOD,
+        ema_low_period=config.EMA_LOW_PERIOD,
+        ema_trigger_period=config.EMA_TRIGGER_PERIOD,
+        atr_period=config.ATR_PERIOD,
+        channel_avg_period=config.CHANNEL_AVG_PERIOD,
     )
-    return current_rsi, long_th, short_th
+
+    # Use the last completed candle (index -1)
+    i = len(klines) - 1
+    ema_h = ind["ema_high"][i]
+    ema_l = ind["ema_low"][i]
+    ema_t = ind["ema_trigger"][i]
+    atr_v = ind["atr"][i]
+    cw = ind["channel_width"][i]
+    cw_avg = ind["channel_width_avg"][i]
+
+    # All required values must be present
+    if any(v is None for v in (ema_h, ema_l, ema_t, atr_v, cw, cw_avg)):
+        return None
+
+    # Channel width filter (avoids ranging market)
+    if cw <= cw_avg:
+        return None
+
+    close_price = closes[i]
+
+    # LONG: EMA7 closes above EMA100(High)
+    if ema_t > ema_h:
+        return Signal(
+            side="Buy",
+            symbol=symbol,
+            entry_price=close_price,
+            atr=atr_v,
+            ema_high=ema_h,
+            ema_low=ema_l,
+            ema_trigger=ema_t,
+            channel_width=cw,
+            channel_width_avg=cw_avg,
+        )
+
+    # SHORT: EMA7 closes below EMA100(Low)
+    if ema_t < ema_l:
+        return Signal(
+            side="Sell",
+            symbol=symbol,
+            entry_price=close_price,
+            atr=atr_v,
+            ema_high=ema_h,
+            ema_low=ema_l,
+            ema_trigger=ema_t,
+            channel_width=cw,
+            channel_width_avg=cw_avg,
+        )
+
+    return None
+
+
+def check_reverse_signal(side: str, klines: List[Dict]) -> bool:
+    """
+    Check if EMA7 has crossed the opposite EMA100 channel on the latest closed candle.
+    Used to force-close positions when strategy reverses.
+
+    For a Long position: returns True if EMA7 < EMA100(Low).
+    For a Short position: returns True if EMA7 > EMA100(High).
+    """
+    if len(klines) < config.EMA_HIGH_PERIOD + 2:
+        return False
+
+    highs = [k["high"] for k in klines]
+    lows = [k["low"] for k in klines]
+    closes = [k["close"] for k in klines]
+
+    ema_h = indicators.ema(highs, config.EMA_HIGH_PERIOD)
+    ema_l = indicators.ema(lows, config.EMA_LOW_PERIOD)
+    ema_t = indicators.ema(closes, config.EMA_TRIGGER_PERIOD)
+
+    i = len(klines) - 1
+    if ema_h[i] is None or ema_l[i] is None or ema_t[i] is None:
+        return False
+
+    if side == "Buy":
+        # Long position reverses if EMA7 dropped below EMA100(Low)
+        return ema_t[i] < ema_l[i]
+    else:
+        # Short position reverses if EMA7 rose above EMA100(High)
+        return ema_t[i] > ema_h[i]

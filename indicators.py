@@ -1,155 +1,120 @@
 """
-Teknik göstergeler: EMA, RSI, ATR, Chandelier Exit ve yardımcılar.
-Tamamı pandas/numpy ile, harici ta-lib gerektirmez.
+Technical indicators: EMA, ATR, Channel Width.
+All functions are pure (no I/O) and operate on numeric lists.
 """
-from __future__ import annotations
-
-from typing import Tuple, Optional
-import numpy as np
-import pandas as pd
+from typing import List, Optional
 
 
-# ============= EMA =============
-def ema(series: pd.Series, period: int) -> pd.Series:
-    """Üstel hareketli ortalama (TradingView ile uyumlu)."""
-    return series.ewm(span=period, adjust=False, min_periods=period).mean()
-
-
-# ============= RSI (Wilder) =============
-def rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    """Wilder RSI - TradingView'in default RSI'ı ile uyumlu."""
-    delta = series.diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
-
-    # Wilder smoothing: alpha = 1/period
-    avg_gain = gain.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
-    avg_loss = loss.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
-
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    rsi_values = 100 - (100 / (1 + rs))
-    # avg_loss 0 ise RSI 100 olur
-    rsi_values = rsi_values.fillna(100)
-    return rsi_values
-
-
-# ============= ATR (Wilder) =============
-def true_range(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
-    prev_close = close.shift(1)
-    tr1 = high - low
-    tr2 = (high - prev_close).abs()
-    tr3 = (low - prev_close).abs()
-    return pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-
-
-def atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
-    """Wilder ATR."""
-    tr = true_range(high, low, close)
-    return tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
-
-
-# ============= Dinamik RSI Eşikleri =============
-def dynamic_rsi_thresholds(
-    rsi_series: pd.Series,
-    lookback: int = 100,
-    extreme_count: int = 10,
-) -> Tuple[float, float]:
+def ema(values: List[float], period: int) -> List[Optional[float]]:
     """
-    Son `lookback` RSI değerinin en düşük `extreme_count` tanesinin ortalaması = long eşiği.
-    En yüksek `extreme_count` tanesinin ortalaması = short eşiği.
+    Standard EMA. Returns list same length as input.
+    First (period-1) elements are None; element at index (period-1) is the SMA seed.
     """
-    clean = rsi_series.dropna()
-    if len(clean) < lookback:
-        # Yeterli veri yoksa muhafazakar varsayılan değerler
-        return 30.0, 70.0
+    if period <= 0 or len(values) < period:
+        return [None] * len(values)
 
-    window = clean.iloc[-lookback:].values
-    sorted_vals = np.sort(window)
-    long_th = float(sorted_vals[:extreme_count].mean())
-    short_th = float(sorted_vals[-extreme_count:].mean())
-    return long_th, short_th
+    out: List[Optional[float]] = [None] * len(values)
+    # Seed with SMA of first `period` values
+    seed = sum(values[:period]) / period
+    out[period - 1] = seed
+    k = 2 / (period + 1)
+    for i in range(period, len(values)):
+        prev = out[i - 1]
+        out[i] = (values[i] - prev) * k + prev
+    return out
 
 
-# ============= ATR Oranı =============
-def atr_ratio(atr_series: pd.Series, lookback: int = 100) -> float:
+def true_range(highs: List[float], lows: List[float], closes: List[float]) -> List[float]:
     """
-    Son kapanan ATR / son `lookback` ATR'nin ortalaması.
+    True Range for each bar. TR[0] = high[0] - low[0] (no prior close).
     """
-    clean = atr_series.dropna()
-    if len(clean) < lookback:
-        return 0.0
-
-    current = float(clean.iloc[-1])
-    avg = float(clean.iloc[-lookback:].mean())
-    if avg <= 0:
-        return 0.0
-    return current / avg
-
-
-# ============= Chandelier Exit =============
-def chandelier_exit_long(
-    high: pd.Series,
-    atr_series: pd.Series,
-    period: int,
-    multiplier: float,
-    lookback_end: Optional[int] = None,
-) -> float:
-    """
-    Long pozisyon için CE: son `period` mumun en yükseği - multiplier * ATR.
-    `lookback_end` verilirse o indekse kadar (dahil) hesaplanır, verilmezse son değer.
-    """
-    if lookback_end is None:
-        h_window = high.iloc[-period:]
-        a_val = float(atr_series.iloc[-1])
-    else:
-        end = lookback_end + 1
-        start = max(0, end - period)
-        h_window = high.iloc[start:end]
-        a_val = float(atr_series.iloc[lookback_end])
-    return float(h_window.max()) - multiplier * a_val
+    n = len(highs)
+    tr = [0.0] * n
+    if n == 0:
+        return tr
+    tr[0] = highs[0] - lows[0]
+    for i in range(1, n):
+        h_l = highs[i] - lows[i]
+        h_pc = abs(highs[i] - closes[i - 1])
+        l_pc = abs(lows[i] - closes[i - 1])
+        tr[i] = max(h_l, h_pc, l_pc)
+    return tr
 
 
-def chandelier_exit_short(
-    low: pd.Series,
-    atr_series: pd.Series,
-    period: int,
-    multiplier: float,
-    lookback_end: Optional[int] = None,
-) -> float:
+def atr(highs: List[float], lows: List[float], closes: List[float], period: int = 14) -> List[Optional[float]]:
     """
-    Short pozisyon için CE: son `period` mumun en düşüğü + multiplier * ATR.
+    Wilder's ATR (RMA of True Range).
+    Returns list same length as input; first `period-1` elements are None.
     """
-    if lookback_end is None:
-        l_window = low.iloc[-period:]
-        a_val = float(atr_series.iloc[-1])
-    else:
-        end = lookback_end + 1
-        start = max(0, end - period)
-        l_window = low.iloc[start:end]
-        a_val = float(atr_series.iloc[lookback_end])
-    return float(l_window.min()) + multiplier * a_val
+    tr = true_range(highs, lows, closes)
+    n = len(tr)
+    out: List[Optional[float]] = [None] * n
+    if n < period:
+        return out
+    # Seed with SMA of first `period` TRs
+    seed = sum(tr[:period]) / period
+    out[period - 1] = seed
+    for i in range(period, n):
+        prev = out[i - 1]
+        out[i] = (prev * (period - 1) + tr[i]) / period
+    return out
 
 
-# ============= RSI Crossover =============
-def rsi_cross_up(rsi_series: pd.Series, threshold: float) -> bool:
+def channel_widths(ema_high: List[Optional[float]], ema_low: List[Optional[float]]) -> List[Optional[float]]:
     """
-    Önceki kapanış altında, son kapanış üstünde/eşit → yukarı cross.
+    Difference between EMA(high) and EMA(low) per bar.
     """
-    clean = rsi_series.dropna()
-    if len(clean) < 2:
-        return False
-    prev = float(clean.iloc[-2])
-    last = float(clean.iloc[-1])
-    return prev < threshold <= last
+    n = len(ema_high)
+    out: List[Optional[float]] = [None] * n
+    for i in range(n):
+        if ema_high[i] is not None and ema_low[i] is not None:
+            out[i] = ema_high[i] - ema_low[i]
+    return out
 
 
-def rsi_cross_down(rsi_series: pd.Series, threshold: float) -> bool:
+def rolling_average(values: List[Optional[float]], window: int) -> List[Optional[float]]:
     """
-    Önceki kapanış üstünde, son kapanış altında/eşit → aşağı cross.
+    Simple rolling average over `window` bars.
+    Skips None values; returns None until enough data.
     """
-    clean = rsi_series.dropna()
-    if len(clean) < 2:
-        return False
-    prev = float(clean.iloc[-2])
-    last = float(clean.iloc[-1])
-    return prev > threshold >= last
+    n = len(values)
+    out: List[Optional[float]] = [None] * n
+    for i in range(n):
+        start = i - window + 1
+        if start < 0:
+            continue
+        window_slice = values[start:i + 1]
+        if any(v is None for v in window_slice):
+            continue
+        out[i] = sum(window_slice) / window  # type: ignore
+    return out
+
+
+def compute_all_indicators(
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+    ema_high_period: int,
+    ema_low_period: int,
+    ema_trigger_period: int,
+    atr_period: int,
+    channel_avg_period: int,
+) -> dict:
+    """
+    Compute all indicators we need in one call.
+    Returns dict with all series; caller usually only needs the last 2 values.
+    """
+    ema_h = ema(highs, ema_high_period)
+    ema_l = ema(lows, ema_low_period)
+    ema_t = ema(closes, ema_trigger_period)
+    atr_v = atr(highs, lows, closes, atr_period)
+    width = channel_widths(ema_h, ema_l)
+    width_avg = rolling_average(width, channel_avg_period)
+    return {
+        "ema_high": ema_h,
+        "ema_low": ema_l,
+        "ema_trigger": ema_t,
+        "atr": atr_v,
+        "channel_width": width,
+        "channel_width_avg": width_avg,
+    }

@@ -1,230 +1,132 @@
 """
-Telegram bildirim wrapper'ı - requests ile direkt HTTP.
+Telegram notifications via Bot API.
+Uses simple HTTP POST with `requests`, no async dependency.
+All send_* functions silently swallow errors (logged to stdout) so that
+Telegram outages never crash the trading loop.
 """
-from __future__ import annotations
-
-import logging
-import time
-from typing import Optional
-
 import requests
+from typing import List
 
 import config
 
-logger = logging.getLogger(__name__)
+
+_TELEGRAM_URL = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}/sendMessage"
 
 
-class TelegramNotifier:
-    """Telegram bot mesaj gönderici."""
-
-    BASE_URL = "https://api.telegram.org"
-
-    def __init__(self, token: str, chat_id: str) -> None:
-        self.token = token
-        self.chat_id = chat_id
-        self.session = requests.Session()
-        self.api_url = f"{self.BASE_URL}/bot{token}/sendMessage"
-
-    def send(self, text: str, parse_mode: str = "HTML", silent: bool = False) -> bool:
-        if not self.token or not self.chat_id:
-            logger.warning("Telegram token/chat_id boş, mesaj atlanıyor")
-            return False
-
-        if len(text) > 4000:
-            parts = self._split_message(text, 4000)
-            ok = True
-            for p in parts:
-                if not self._send_single(p, parse_mode, silent):
-                    ok = False
-            return ok
-
-        return self._send_single(text, parse_mode, silent)
-
-    def _send_single(self, text: str, parse_mode: str, silent: bool) -> bool:
-        payload = {
-            "chat_id": self.chat_id,
-            "text": text,
-            "parse_mode": parse_mode,
-            "disable_web_page_preview": True,
-            "disable_notification": silent,
-        }
-
-        last_err: Optional[Exception] = None
-        for attempt in range(1, config.RETRY_ATTEMPTS + 1):
-            try:
-                resp = self.session.post(self.api_url, json=payload, timeout=config.HTTP_TIMEOUT)
-                if resp.status_code == 200:
-                    return True
-                if resp.status_code == 400 and parse_mode:
-                    logger.warning(f"Telegram parse hatası, plain text tekrar: {resp.text[:200]}")
-                    payload2 = dict(payload)
-                    payload2.pop("parse_mode", None)
-                    resp2 = self.session.post(self.api_url, json=payload2, timeout=config.HTTP_TIMEOUT)
-                    if resp2.status_code == 200:
-                        return True
-                logger.warning(
-                    f"Telegram gönderim başarısız (deneme {attempt}): "
-                    f"status={resp.status_code}, body={resp.text[:200]}"
-                )
-            except Exception as e:
-                last_err = e
-                logger.warning(f"Telegram exception (deneme {attempt}): {e}")
-            time.sleep(config.RETRY_DELAY)
-
-        if last_err:
-            logger.error(f"Telegram gönderimi başarısız: {last_err}")
-        return False
-
-    @staticmethod
-    def _split_message(text: str, max_len: int) -> list:
-        if len(text) <= max_len:
-            return [text]
-        lines = text.split("\n")
-        parts = []
-        cur = []
-        cur_len = 0
-        for line in lines:
-            line_len = len(line) + 1
-            if cur_len + line_len > max_len and cur:
-                parts.append("\n".join(cur))
-                cur = [line]
-                cur_len = line_len
-            else:
-                cur.append(line)
-                cur_len += line_len
-        if cur:
-            parts.append("\n".join(cur))
-        return parts
+def _send(text: str) -> None:
+    """Send a message; never raises."""
+    try:
+        resp = requests.post(
+            _TELEGRAM_URL,
+            data={
+                "chat_id": config.TELEGRAM_CHAT_ID,
+                "text": text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            print(f"[TG-ERR] {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        print(f"[TG-ERR] {e}")
 
 
-# ============= MESAJ ŞABLONLARI =============
-
-def fmt_startup(balance: float, stake: float, leverage: int, symbol_count: int) -> str:
-    return (
-        "🚀 <b>Bot Başladı</b>\n"
-        f"💵 Bakiye: <b>{balance:.2f} USDT</b>\n"
-        f"📊 Stake (sabit): <b>{stake:.2f} USDT</b>\n"
-        f"⚡ Kaldıraç: <b>{leverage}x</b>\n"
-        f"🎯 Sembol sayısı: <b>{symbol_count}</b>\n"
-        f"🛑 Stop: %1 | CE: 1 ATR | BE: 0.7 ATR kârda"
+# ============================================================
+# MESSAGE FORMATTERS
+# ============================================================
+def send_bot_start(balance: float, stake: float, leverage: int, symbols: List[str]) -> None:
+    msg = (
+        f"🚀 <b>BOT BAŞLATILDI</b>\n\n"
+        f"💰 Toplam Bakiye: <b>{balance:.2f} USDT</b>\n"
+        f"🎯 Stake (%20): <b>{stake:.2f} USDT</b>\n"
+        f"⚡ Kaldıraç: <b>{leverage}x ISOLATED</b>\n"
+        f"📊 Coin Sayısı: <b>{len(symbols)}</b>\n"
+        f"⏱ Giriş Tarama: 5 dk / Çıkış Tarama: 60 sn\n\n"
+        f"Strateji: EMA7 + EMA100(H/L) + Kanal Genişliği Filtresi"
     )
+    _send(msg)
 
 
-def fmt_entry(
-    symbol: str, side: str, entry_price: float, qty: float,
-    stop_price: float, ce_price: float, stake: float, leverage: int,
-) -> str:
-    arrow = "🟢 LONG" if side == "long" else "🔴 SHORT"
-    return (
-        f"{arrow} <b>{symbol}</b>\n"
-        f"📈 Giriş: <b>{entry_price:.6f}</b>\n"
-        f"📦 Miktar: <b>{qty}</b>\n"
-        f"🛑 Stop (%1): <b>{stop_price:.6f}</b>\n"
-        f"🎯 CE: <b>{ce_price:.6f}</b>\n"
-        f"💰 Stake: <b>{stake:.2f} USDT</b> × <b>{leverage}x</b>"
+def send_scan_summary(scanned: int, signals: List[str], active_count: int, max_pos: int) -> None:
+    free_slots = max_pos - active_count
+    sig_text = ", ".join(signals) if signals else "—"
+    msg = (
+        f"📡 <b>5 DK TARAMA</b>\n"
+        f"Taranan: {scanned} | Sinyal: {sig_text}\n"
+        f"Açık İşlem: {active_count}/{max_pos} (Boş slot: {free_slots})"
     )
+    _send(msg)
 
 
-def fmt_be_moved(symbol: str, side: str, new_stop: float, entry_price: float) -> str:
-    arrow = "🟢 LONG" if side == "long" else "🔴 SHORT"
-    return (
-        f"🛡 <b>BE Taşındı</b> {arrow} <b>{symbol}</b>\n"
-        f"📈 Giriş: {entry_price:.6f}\n"
-        f"🛑 Yeni stop: <b>{new_stop:.6f}</b>\n"
-        f"✅ Zarar koruması aktif (+0.2 ATR kâr garanti)"
+def send_entry(symbol: str, side: str, price: float, qty: float, stake: float,
+               leverage: int, sl_price: float, atr_value: float) -> None:
+    arrow = "🟢" if side == "Buy" else "🔴"
+    direction = "LONG" if side == "Buy" else "SHORT"
+    notional = qty * price
+    msg = (
+        f"{arrow} <b>{direction} AÇILDI</b> — <code>{symbol}</code>\n\n"
+        f"💵 Giriş: <b>{price}</b>\n"
+        f"📦 Miktar: {qty} ({notional:.2f} USDT hacim)\n"
+        f"🎯 Stake: {stake:.2f} USDT × {leverage}x\n"
+        f"🛑 SL (%1): {sl_price}\n"
+        f"📏 ATR: {atr_value:.6f}"
     )
+    _send(msg)
 
 
-def fmt_exit(
-    symbol: str, side: str,
-    entry_price: float, exit_price: float,
-    reason: str, pnl_usdt: float, pnl_pct: float,
-) -> str:
-    arrow = "🟢 LONG" if side == "long" else "🔴 SHORT"
-    if pnl_usdt > 0:
-        emoji = "✅"
-        status = "KÂR"
-    elif pnl_usdt < 0:
-        emoji = "❌"
-        status = "ZARAR"
-    else:
-        emoji = "⚪"
-        status = "BREAKEVEN"
-    return (
-        f"{emoji} <b>{symbol}</b> {arrow} KAPANDI ({status})\n"
-        f"📈 Giriş: <b>{entry_price:.6f}</b>\n"
-        f"🚪 Çıkış: <b>{exit_price:.6f}</b>\n"
-        f"📋 Sebep: <b>{reason}</b>\n"
-        f"💸 PnL: <b>{pnl_usdt:+.2f} USDT</b> ({pnl_pct:+.2f}%)"
+def send_stage1(symbol: str, side: str, price: float, ce_level: float, atr_value: float) -> None:
+    msg = (
+        f"⚙️ <b>AŞAMA 1 — CE AKTİF</b>\n"
+        f"<code>{symbol}</code> ({'LONG' if side == 'Buy' else 'SHORT'})\n"
+        f"Fiyat: {price} (+1 ATR kâr)\n"
+        f"CE Seviyesi: <b>{ce_level}</b> (1 ATR geriden takip)\n"
+        f"ATR: {atr_value:.6f}"
     )
+    _send(msg)
 
 
-def fmt_max_positions(symbol: str, side: str) -> str:
-    return (
-        f"⚠️ <b>{symbol}</b> {side.upper()} sinyali geldi ama "
-        f"5 pozisyon dolu, atlandı."
+def send_stage2(symbol: str, side: str, price: float, new_sl: float, profit_pct: float) -> None:
+    msg = (
+        f"🔒 <b>AŞAMA 2 — KÂR KİLİTLENDİ</b>\n"
+        f"<code>{symbol}</code> ({'LONG' if side == 'Buy' else 'SHORT'})\n"
+        f"Fiyat: {price} (+{profit_pct*100:.2f}%)\n"
+        f"Yeni SL: <b>{new_sl}</b> (+%1 kârda)\n"
+        f"CE takibe devam ediyor (1 ATR)"
     )
+    _send(msg)
 
 
-def fmt_duplicate(symbol: str, side: str) -> str:
-    return (
-        f"⚠️ <b>{symbol}</b> {side.upper()} sinyali geldi ama "
-        f"bu coinde zaten açık pozisyon var, atlandı."
+def send_exit(symbol: str, side: str, entry_price: float, exit_price: float,
+              pnl_usdt: float, pnl_pct: float, reason: str) -> None:
+    icon = "✅" if pnl_usdt >= 0 else "❌"
+    direction = "LONG" if side == "Buy" else "SHORT"
+    msg = (
+        f"{icon} <b>İŞLEM KAPANDI</b> — <code>{symbol}</code> ({direction})\n\n"
+        f"Giriş: {entry_price} → Çıkış: {exit_price}\n"
+        f"PnL: <b>{pnl_usdt:+.2f} USDT</b> ({pnl_pct:+.2f}%)\n"
+        f"Sebep: <i>{reason}</i>"
     )
+    _send(msg)
 
 
-def fmt_error(context: str, error: str) -> str:
-    safe_err = str(error).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    safe_ctx = str(context).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    return f"🚨 <b>HATA</b> [{safe_ctx}]\n<code>{safe_err[:500]}</code>"
+def send_error(context: str, error: str) -> None:
+    msg = f"🚨 <b>HATA</b>\n{context}\n<code>{error[:300]}</code>"
+    _send(msg)
 
 
-def _categorize_rejection(reason: str) -> str:
-    """Rejection reason'ı kategoriye çevir."""
-    r = reason.lower()
-    if "24h trend" in r:
-        return "24H Trend"
-    if "atr" in r:
-        return "ATR filtresi"
-    return "Diğer"
+def send_daily_summary(total_pnl: float, trade_count: int, win_count: int) -> None:
+    win_rate = (win_count / trade_count * 100) if trade_count else 0
+    icon = "📈" if total_pnl >= 0 else "📉"
+    msg = (
+        f"{icon} <b>GÜNLÜK ÖZET</b>\n\n"
+        f"Toplam PnL: <b>{total_pnl:+.2f} USDT</b>\n"
+        f"İşlem Sayısı: {trade_count}\n"
+        f"Kazanma Oranı: %{win_rate:.1f} ({win_count}/{trade_count})"
+    )
+    _send(msg)
 
 
-def fmt_scan_summary(
-    scan_time: str,
-    total_symbols: int,
-    opened: list,
-    filter_rejections: list,
-    max_pos_skips: list,
-    duplicate_skips: list,
-    open_count: int,
-    stake: float,
-    leverage: int,
-) -> str:
-    lines = []
-    lines.append("📊 <b>30dk Tarama Özeti</b>")
-    lines.append(f"⏰ {scan_time} | {total_symbols} sembol tarandı")
-    lines.append("")
-
-    lines.append(f"✅ <b>Açılan pozisyon: {len(opened)}</b>")
-    for sym, sd in opened:
-        lines.append(f"{sym} {sd.upper()}")
-    lines.append("")
-
-    counts = {}
-    for _sym, _sd, reason in filter_rejections:
-        cat = _categorize_rejection(reason)
-        counts[cat] = counts.get(cat, 0) + 1
-
-    lines.append(f"⚠️ <b>Crossover: {len(filter_rejections)}</b>")
-    for cat in ("24H Trend", "ATR filtresi", "Diğer"):
-        if counts.get(cat, 0) > 0:
-            lines.append(f"{cat}: {counts[cat]}")
-    lines.append("")
-
-    lines.append(f"🚫 5 pozisyon dolu: {len(max_pos_skips)}")
-    lines.append(f"📌 Zaten açık: {len(duplicate_skips)}")
-    lines.append("")
-    lines.append(f"📈 Açık pozisyon: {open_count}/{config.MAX_POSITIONS}")
-    lines.append(f"💰 Stake: {stake:.2f} USDT × {leverage}x")
-
-    return "\n".join(lines)
+def send_info(text: str) -> None:
+    """Generic info message."""
+    _send(f"ℹ️ {text}")

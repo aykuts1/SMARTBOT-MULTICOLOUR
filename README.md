@@ -1,138 +1,134 @@
-# Bybit Futures Scalp Bot
+# Bybit EMA Channel Scalp Bot
 
-Bybit USDT perpetual futures üzerinde 30 dakikalık zaman diliminde RSI crossover + EMA200 + ATR filtresi ile scalping yapan otomatik bot. Railway worker olarak çalışmak üzere tasarlanmıştır.
+Bybit USDT perpetual futures üzerinde 5 dakikalık zaman diliminde **EMA7 + EMA100 Yüksek/Düşük kanalı + kanal genişliği filtresi** ile çalışan otomatik scalp botu. Railway worker olarak çalışmak üzere tasarlanmıştır.
+
+---
 
 ## Strateji Özeti
 
-**Göstergeler**
-- EMA 200 (30dk ve 2 saat)
-- RSI 14 (30dk)
-- ATR 14 (30dk)
-- Chandelier Exit (22 mum, 1 ATR geride)
+### Göstergeler
+- **EMA100(High)** — son 100 mumun en yüksek fiyatlarının EMA'sı (dinamik direnç)
+- **EMA100(Low)** — son 100 mumun en düşük fiyatlarının EMA'sı (dinamik destek)
+- **EMA7(Close)** — son 7 kapanış fiyatının EMA'sı (tetikleyici)
+- **ATR(14)** — 5 dakikalık ATR
 
-**Dinamik RSI Eşikleri**
-Son 100 RSI değerinin en düşük 10'unun ortalaması = long eşiği; en yüksek 10'unun ortalaması = short eşiği. Her mum kapanışında yeniden hesaplanır.
+### Giriş Sinyalleri
+**Long:**
+- 5 dakikalık mum kapanışında **EMA7 > EMA100(High)**
+- **Kanal genişliği > son 100 mumun ortalama kanal genişliği**
 
-**ATR Filtresi**
-Anlık ATR / son 100 mumun ATR ortalaması < 0.8 ise işlem açılmaz.
+**Short:**
+- 5 dakikalık mum kapanışında **EMA7 < EMA100(Low)**
+- Aynı kanal genişliği filtresi
 
-**Long Sinyal**
-- RSI dinamik long eşiğinin altına düşüp geri yukarı çıkar (önceki mum < eşik, son mum ≥ eşik)
-- Fiyat 30dk EMA200 üstünde
-- Fiyat 2H EMA200 üstünde
-- ATR oranı ≥ 0.8
-- Mum kapanışıyla giriş
+### Pozisyon Yönetimi
+- **%20** bakiye stake olarak ayrılır (bot başlangıcında kilitlenir, restart'a kadar sabit)
+- **50x ISOLATED** kaldıraç
+- Maksimum **5 eş zamanlı pozisyon**, aynı coinde **1 pozisyon**
 
-**Short Sinyal**
-Long'un tam tersi.
+### Çıkış Aşamaları
+| Aşama | Tetikleyici | Aksiyon |
+|---|---|---|
+| Giriş | İşlem açılır | Borsaya **%1 SL** emri |
+| Aşama 1 | **+1 ATR kâr** | CE devreye girer, **1 ATR geriden** takip |
+| Aşama 2 | **+%1.2 kâr** | SL **+%1 kâra** taşınır, CE devam |
 
-**Pozisyon Yönetimi**
-- Bot başlangıcında bakiyenin %20'si stake olarak kilitlenir (restart'a kadar sabit)
-- 10x kaldıraç
-- Maksimum 5 eş zamanlı açık pozisyon
-- Aynı coinde maksimum 1 açık pozisyon
+**Çıkış tetikleyicileri:**
+1. CE seviyesi tetiklenirse → çıkış
+2. EMA7 ters kanalı keserse → anında çıkış (strateji tersine döndü)
+3. %1 SL tetiklenirse → çıkış (borsa tarafında)
 
-**Stop ve Kâr Yönetimi**
-- Giriş: %1 sabit stop (Bybit pozisyon seviyesinde) + 1 ATR geride Chandelier Exit (bot tarafında)
-- 0.5 ATR kârda stop entry + 0.2 ATR seviyesine taşınır (BE)
-- 1 ATR kârda CE 0.5 ATR geride takibe geçer
-- Hangisi önce tetiklenirse pozisyon kapanır
+### Tarama
+- **Giriş taraması:** her 5 dakikalık mum kapanışında
+- **Çıkış taraması:** her 60 saniyede bir
 
-**Emir Tipi**
-Limit emir, market gibi dolması için fiyatın %0.05 ötesinde verilir.
+---
 
 ## Dosya Yapısı
 
 ```
 .
-├── config.py              # Environment variables ve sabitler
+├── config.py              # Environment variables ve strateji parametreleri
 ├── bybit_client.py        # Bybit v5 API wrapper
-├── indicators.py          # EMA, RSI, ATR, Chandelier Exit
-├── strategy.py            # Sinyal üretimi ve filtreler
-├── position_manager.py    # Pozisyon hafızası ve yönetimi
+├── indicators.py          # EMA, ATR, kanal genişliği
+├── strategy.py            # Giriş/ters sinyal mantığı
+├── position_manager.py    # Açık pozisyon takibi (CE, aşamalar)
 ├── telegram_bot.py        # Telegram bildirimleri
-├── main.py                # Ana giriş + scheduler
+├── main.py                # Ana döngü + scheduler
 ├── requirements.txt       # Python bağımlılıkları
 ├── Procfile               # Railway worker komutu
 ├── runtime.txt            # Python sürümü
 └── README.md
 ```
 
+---
+
 ## Environment Variables
 
 Railway'de aşağıdaki değişkenleri ayarlamak gerekir:
 
 | Değişken | Zorunlu | Açıklama |
-|----------|---------|----------|
+| --- | --- | --- |
 | `BYBIT_API_KEY` | ✅ | Bybit API anahtarı |
 | `BYBIT_API_SECRET` | ✅ | Bybit API gizli anahtarı |
 | `TELEGRAM_BOT_TOKEN` | ✅ | Telegram bot token (BotFather'dan) |
-| `TELEGRAM_CHAT_ID` | ✅ | Telegram chat ID (mesajların gönderileceği) |
-| `SYMBOLS` | ❌ | Virgülle ayrılmış sembol listesi (boşsa varsayılan kullanılır) |
-| `BYBIT_TESTNET` | ❌ | `true` ise testnet kullanır (varsayılan: `false`) |
+| `TELEGRAM_CHAT_ID` | ✅ | Telegram chat ID |
+| `SYMBOLS` | ❌ | Virgülle ayrılmış sembol listesi (boşsa 40 coinlik varsayılan) |
+| `BYBIT_TESTNET` | ❌ | `true` ise testnet (varsayılan: `false`) |
 
-## Varsayılan Sembol Listesi
+---
 
-BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT, XRPUSDT, SUIUSDT, ZECUSDT, DOGEUSDT, TONUSDT, TRXUSDT, AAVEUSDT, ADAUSDT, LTCUSDT, LINKUSDT, APTUSDT, INJUSDT, AVAXUSDT, NEARUSDT, 1000PEPEUSDT, MEGAUSDT, ONDOUSDT, HYPEUSDT, UNIUSDT, ASTERUSDT, WLDUSDT, OPUSDT, ARBUSDT, STXUSDT, JUPUSDT, ENAUSDT, TIAUSDT, FETUSDT, SEIUSDT, EIGENUSDT
+## Varsayılan Coin Listesi (40 coin)
+
+BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, DOGEUSDT, PEPEUSDT, SUIUSDT, WIFUSDT, AVAXUSDT, NEARUSDT, SHIBUSDT, APTUSDT, ADAUSDT, LINKUSDT, ORDIUSDT, FETUSDT, OPUSDT, ARBUSDT, FTMUSDT, TIAUSDT, BONKUSDT, FLOKIUSDT, WLDUSDT, LTCUSDT, BCHUSDT, DOTUSDT, TRXUSDT, INJUSDT, SEIUSDT, RENDERUSDT, ATOMUSDT, POLUSDT, STXUSDT, LDOUSDT, FILUSDT, GALAUSDT, GRTUSDT, UNIUSDT, ARKMUSDT, ETCUSDT
+
+---
 
 ## Bybit API İzinleri
 
-Oluşturacağın API key'in şu izinlere sahip olması gerekir:
-- ✅ **Contract / Unified Trading**: Orders + Positions
+API key şu izinlere sahip olmalı:
+- ✅ **Unified Trading**: Orders + Positions
 - ❌ Withdraw (kapalı kalsın)
+
+---
 
 ## Railway'de Kurulum
 
 1. Bu repoyu GitHub'a push et
-2. Railway'de yeni proje → "Deploy from GitHub repo"
-3. Repoyu seç
-4. Settings → Variables sekmesinden environment variables'ları ekle
+2. Railway → mevcut projeyi seç (veya yeni proje → "Deploy from GitHub repo")
+3. Eski dosyalar otomatik olarak yenileriyle değişecek
+4. Environment variables zaten ayarlıysa dokunmaya gerek yok
 5. Deploy başlayacak; logları takip et
 
-Procfile sayesinde Railway otomatik olarak `worker: python main.py` komutunu çalıştırır.
+`Procfile` sayesinde Railway otomatik olarak `worker: python main.py` çalıştırır.
 
-## Lokal Test
-
-```bash
-# Python 3.11.6 önerilir
-pip install -r requirements.txt
-
-# .env dosyası oluştur
-cat > .env <<EOF
-BYBIT_API_KEY=...
-BYBIT_API_SECRET=...
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...
-BYBIT_TESTNET=true
-EOF
-
-# Test için python-dotenv yükle ve main.py'a şu satırı ekle (üst kısma):
-# from dotenv import load_dotenv; load_dotenv()
-
-python main.py
-```
+---
 
 ## Telegram Bildirimleri
 
 Bot şu durumlarda Telegram mesajı gönderir:
 
-- 🚀 Bot başlangıcında: bakiye, stake, kaldıraç, sembol sayısı
-- 🟢/🔴 Pozisyon açılışında: coin, yön, fiyat, miktar, stop, CE, stake
-- ✅/❌ Pozisyon kapanışında: çıkış fiyatı, sebep (SL/CE), PnL ($ ve %)
-- ⚠️ Crossover var ama filtreye takıldıysa: hangi filtreye takıldığı
-- 🚫 5 pozisyon dolu ve sinyal geldiyse
-- 🔁 Aynı coinde pozisyon varken sinyal geldiyse
-- 📊 Her 30dk tarama sonunda özet
-- 🚨 API/bağlantı hatası
+- 🚀 **Bot başlangıcı** — bakiye, stake, kaldıraç, coin sayısı
+- 📡 **Her 5dk tarama özeti** — taranan, sinyaller, aktif/boş slot
+- 🟢/🔴 **İşlem açılışı** — coin, yön, fiyat, miktar, SL, ATR
+- ⚙️ **Aşama 1** — CE aktifleşti, seviye
+- 🔒 **Aşama 2** — SL kâra taşındı
+- ✅/❌ **İşlem kapanışı** — giriş/çıkış, PnL, sebep
+- 🚨 **Hata bildirimi** — API/bağlantı hataları
+- 📈/📉 **Günlük özet** — UTC gün dönümünde toplam PnL, işlem sayısı, kazanma oranı
+
+---
 
 ## Önemli Notlar
 
-- **Bot Unified Trading hesabı kullanır**. Klasik hesap (eski tip) için `bybit_client.py`'da `ACCOUNT_TYPE = "CONTRACT"` olarak değiştirilebilir.
-- **Pozisyon modu**: One-way mode varsayılır (positionIdx=0). Hedge mode kullanıyorsan değiştir.
-- **Stake bot başlangıcında sabitlenir**. Bakiye değişse de stake değişmez. Stake'i güncellemek için botu restart et.
-- **CE seviyesi sadece bot hafızasında tutulur** (Bybit'te değil). Bot restart olursa açık pozisyonların CE state'i kaybolur ama Bybit'teki %1 stop korunur. Restart sonrası CE seviyeleri yeniden hesaplanmaz; manuel müdahale gerekir.
-- **API rate limit**: Bot her 30dk'da 34 sembol × 2 timeframe = 68 kline çağrısı yapar; Bybit limitleri içinde rahat çalışır.
+- **Bot Unified Trading hesabı kullanır.** Klasik hesap için `config.ACCOUNT_TYPE` değiştirilmeli.
+- **One-way mode varsayılır** (positionIdx=0). Hedge mode için kod değiştirilmeli.
+- **Stake bot başlangıcında sabitlenir.** Güncellemek için botu yeniden başlat.
+- **CE seviyesi sadece bot hafızasında tutulur** (borsada değil). Bot restart olursa açık pozisyonların CE state'i kaybolur; borsadaki %1 (veya Aşama 2 sonrası %1 kâr) SL korunur.
+- **Aşama 2 sonrası CE takip etmeye devam eder.** İki çıkış yolundan hangisi önce tetiklenirse o işler.
+
+---
 
 ## Risk Uyarısı
 
-Bu bot finansal tavsiye değildir. Kripto vadeli işlemler yüksek risklidir, sermayenizin tamamını kaybedebilirsiniz. Önce testnet'te ve düşük tutarlarla test edin. Yazılım hataları, ağ kesintileri, borsa kesintileri vb. nedenlerle beklenmedik kayıplar oluşabilir. Kullanım kendi sorumluluğunuzdadır.
+Bu bot finansal tavsiye değildir. Kripto vadeli işlemler **yüksek risklidir**; sermayenizin tamamını kaybedebilirsiniz. 50x kaldıraçta %1 fiyat hareketi, kullanılan teminatın yarısını silebilir. Önce testnet'te ve düşük tutarlarla test edin. Yazılım hataları, ağ kesintileri ve borsa kesintileri nedeniyle beklenmedik kayıplar oluşabilir. Kullanım kendi sorumluluğunuzdadır.

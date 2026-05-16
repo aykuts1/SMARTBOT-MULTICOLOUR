@@ -1,86 +1,82 @@
 """
-Bot yapılandırması - Environment variables ve sabitler
+Configuration module - environment variables and strategy parameters.
 """
 import os
-from typing import List
 
-# ============= API ANAHTARLARI =============
-BYBIT_API_KEY: str = os.getenv("BYBIT_API_KEY", "").strip()
-BYBIT_API_SECRET: str = os.getenv("BYBIT_API_SECRET", "").strip()
-TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+# ============================================================
+# API CREDENTIALS (from Railway environment variables)
+# ============================================================
+BYBIT_API_KEY = os.getenv("BYBIT_API_KEY", "")
+BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# ============= TESTNET / MAINNET =============
-BYBIT_TESTNET: bool = os.getenv("BYBIT_TESTNET", "false").lower() == "true"
+# Optional: testnet (default false)
+BYBIT_TESTNET = os.getenv("BYBIT_TESTNET", "false").lower() == "true"
 
-# ============= VARSAYILAN SEMBOL LİSTESİ =============
-DEFAULT_SYMBOLS: List[str] = [
-    "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT",
-    "SUIUSDT", "ZECUSDT", "DOGEUSDT", "TONUSDT", "TRXUSDT",
-    "AAVEUSDT", "ADAUSDT", "LTCUSDT", "LINKUSDT", "APTUSDT",
-    "INJUSDT", "AVAXUSDT", "NEARUSDT", "1000PEPEUSDT", "MEGAUSDT",
-    "ONDOUSDT", "HYPEUSDT", "UNIUSDT", "ASTERUSDT", "WLDUSDT",
-    "OPUSDT", "ARBUSDT", "STXUSDT", "JUPUSDT", "ENAUSDT",
-    "TIAUSDT", "FETUSDT", "SEIUSDT", "EIGENUSDT",
+# ============================================================
+# COIN LIST (40 coins)
+# ============================================================
+DEFAULT_SYMBOLS = [
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
+    "PEPEUSDT", "SUIUSDT", "WIFUSDT", "AVAXUSDT", "NEARUSDT",
+    "SHIBUSDT", "APTUSDT", "ADAUSDT", "LINKUSDT", "ORDIUSDT",
+    "FETUSDT", "OPUSDT", "ARBUSDT", "FTMUSDT", "TIAUSDT",
+    "BONKUSDT", "FLOKIUSDT", "WLDUSDT", "LTCUSDT", "BCHUSDT",
+    "DOTUSDT", "TRXUSDT", "INJUSDT", "SEIUSDT", "RENDERUSDT",
+    "ATOMUSDT", "POLUSDT", "STXUSDT", "LDOUSDT", "FILUSDT",
+    "GALAUSDT", "GRTUSDT", "UNIUSDT", "ARKMUSDT", "ETCUSDT",
 ]
 
+# Allow override from environment (comma-separated)
+_env_symbols = os.getenv("SYMBOLS", "").strip()
+if _env_symbols:
+    SYMBOLS = [s.strip().upper() for s in _env_symbols.split(",") if s.strip()]
+else:
+    SYMBOLS = DEFAULT_SYMBOLS
 
-def _parse_symbols() -> List[str]:
-    """SYMBOLS env var'ından sembolleri parse et, boşsa varsayılan listeyi döndür."""
-    raw = os.getenv("SYMBOLS", "").strip()
-    if not raw:
-        return DEFAULT_SYMBOLS
-    parts = [s.strip().upper() for s in raw.split(",") if s.strip()]
-    return parts if parts else DEFAULT_SYMBOLS
+# ============================================================
+# STRATEGY PARAMETERS
+# ============================================================
+# Indicators
+EMA_HIGH_PERIOD = 100      # EMA of highs
+EMA_LOW_PERIOD = 100       # EMA of lows
+EMA_TRIGGER_PERIOD = 7     # Trigger EMA on close
+ATR_PERIOD = 14            # ATR length
+CHANNEL_AVG_PERIOD = 100   # Window for average channel width
 
+# Timeframe
+TIMEFRAME = "5"            # Bybit kline interval: "5" = 5 minutes
+KLINE_LIMIT = 300          # Number of candles to fetch (enough for EMA100 + averages)
 
-SYMBOLS: List[str] = _parse_symbols()
+# Risk / Position
+LEVERAGE = 50              # 50x isolated
+STAKE_PERCENT = 0.20       # 20% of total balance
+MAX_POSITIONS = 5          # Max simultaneous open positions
+MARGIN_MODE = "ISOLATED"   # Always isolated
 
-# ============= STRATEJİ PARAMETRELERİ =============
-# RSI
-RSI_PERIOD: int = 14
-RSI_LOOKBACK: int = 100         # Dinamik eşik için bakılacak RSI değer sayısı
-RSI_EXTREME_COUNT: int = 10     # En düşük/yüksek kaç değerin ortalaması alınacak
+# Stop Loss / Exit
+INITIAL_SL_PERCENT = 0.01      # 1% safety net at entry (price-based, not PnL)
+STAGE1_TRIGGER_ATR = 1.0       # Stage 1 activates at +1 ATR profit
+STAGE1_CE_TRAIL_ATR = 1.0      # CE trails 1 ATR behind price
+STAGE2_TRIGGER_PCT = 0.012     # Stage 2 activates at +1.2% profit (price move)
+STAGE2_SL_PCT = 0.01           # SL moves to +1% profit on Stage 2
 
-# ATR
-ATR_PERIOD: int = 14
-ATR_LOOKBACK: int = 100         # ATR oranı için ortalama alınacak mum sayısı
-ATR_RATIO_MIN: float = 0.7      # Minimum ATR oranı
+# Scanning intervals
+ENTRY_SCAN_INTERVAL = 300      # 5 minutes (aligned with candle close)
+EXIT_SCAN_INTERVAL = 60        # 60 seconds
 
-# Trend filtresi (48 mum önceki fiyat)
-TREND_LOOKBACK_BARS: int = 24           # 48 × 30dk = 24 saat öncesi
-TREND_ATR_DISTANCE: float = 0.5         # Fiyat 48 mum öncesinden en az 0.5 ATR uzakta olmalı
+# ============================================================
+# BYBIT API SETTINGS
+# ============================================================
+ACCOUNT_TYPE = "UNIFIED"       # Bybit Unified Trading Account
+CATEGORY = "linear"            # USDT perpetuals
 
-# Chandelier Exit
-CE_INITIAL_MULTIPLIER: float = 1.0      # 1 ATR geride trailing
-
-# ============= POZİSYON YÖNETİMİ =============
-STAKE_PERCENT: float = 0.20     # Bakiyenin %20'si
-LEVERAGE: int = 10              # 10x kaldıraç
-MAX_POSITIONS: int = 5          # Maksimum eş zamanlı açık pozisyon
-
-# Stop ve kâr yönetimi
-INITIAL_STOP_PERCENT: float = 0.01   # %1 sabit stop
-BE_TRIGGER_ATR: float = 0.7          # 0.7 ATR kârda BE'ye taşı
-BE_OFFSET_ATR: float = 0.2           # Entry + 0.2 ATR kâr garantile
-
-# Emir tipi (limit emir, market gibi dolması için slip)
-LIMIT_SLIPPAGE: float = 0.0005       # %0.05
-
-# ============= ZAMANLAMA =============
-KLINE_INTERVAL_30M: str = "30"
-KLINE_LIMIT: int = 250
-EXIT_SCAN_INTERVAL_SEC: int = 60
-
-# ============= TEKNİK =============
-HTTP_TIMEOUT: int = 30
-RETRY_ATTEMPTS: int = 3
-RETRY_DELAY: int = 2
-SCAN_SLEEP_BETWEEN_SYMBOLS: float = 0.3
-
-
-def validate() -> None:
-    """Zorunlu environment variable'ların varlığını kontrol et."""
+# ============================================================
+# VALIDATION
+# ============================================================
+def validate_config():
+    """Ensure required env vars exist."""
     missing = []
     if not BYBIT_API_KEY:
         missing.append("BYBIT_API_KEY")
@@ -91,6 +87,4 @@ def validate() -> None:
     if not TELEGRAM_CHAT_ID:
         missing.append("TELEGRAM_CHAT_ID")
     if missing:
-        raise RuntimeError(
-            f"Eksik environment variable: {', '.join(missing)}"
-        )
+        raise RuntimeError(f"Missing environment variables: {', '.join(missing)}")
