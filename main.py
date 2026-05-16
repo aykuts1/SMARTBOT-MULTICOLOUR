@@ -246,6 +246,7 @@ def entry_scan(client: BybitClient, pm: PositionManager) -> None:
 
     for symbol in config.SYMBOLS:
         try:
+            time.sleep(0.25)  # Rate limit: ~4 req/sec across 40 coins
             klines = client.get_klines(symbol, config.TIMEFRAME, config.KLINE_LIMIT)
             scanned += 1
             if len(klines) < config.EMA_HIGH_PERIOD + config.CHANNEL_AVG_PERIOD:
