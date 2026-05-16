@@ -2,11 +2,13 @@
 Strategy module - generates entry signals from indicator values.
 
 Long signal (5min candle close):
-  - EMA7(close) > EMA100(high)  on the just-closed candle
+  - Previous candle: EMA7(close) <= EMA100(high)
+  - Last closed candle: EMA7(close) > EMA100(high)   ← crossover up
   - channel_width > avg(channel_width, 100)
 
 Short signal:
-  - EMA7(close) < EMA100(low)
+  - Previous candle: EMA7(close) >= EMA100(low)
+  - Last closed candle: EMA7(close) < EMA100(low)    ← crossover down
   - channel_width > avg(channel_width, 100)
 """
 from typing import Optional, Dict, List
@@ -31,11 +33,11 @@ class Signal:
 
 def evaluate_entry(symbol: str, klines: List[Dict]) -> Optional[Signal]:
     """
-    Evaluate the just-closed candle.
+    Evaluate the just-closed candle for a CROSSOVER signal.
     Returns Signal if entry conditions met, else None.
 
     klines: list of dicts (oldest first) with open/high/low/close.
-    The last element must be a CLOSED candle (caller ensures this).
+    The last element must be a CLOSED candle (caller strips the open one).
     """
     if len(klines) < max(config.EMA_HIGH_PERIOD, config.CHANNEL_AVG_PERIOD) + 5:
         return None
@@ -55,17 +57,26 @@ def evaluate_entry(symbol: str, klines: List[Dict]) -> Optional[Signal]:
         channel_avg_period=config.CHANNEL_AVG_PERIOD,
     )
 
-    # Use the last completed candle (index -1)
+    # Last closed candle index and previous candle index
     i = len(klines) - 1
-    ema_h = ind["ema_high"][i]
-    ema_l = ind["ema_low"][i]
-    ema_t = ind["ema_trigger"][i]
+    j = i - 1
+
+    ema_h_now = ind["ema_high"][i]
+    ema_l_now = ind["ema_low"][i]
+    ema_t_now = ind["ema_trigger"][i]
+    ema_h_prev = ind["ema_high"][j]
+    ema_l_prev = ind["ema_low"][j]
+    ema_t_prev = ind["ema_trigger"][j]
     atr_v = ind["atr"][i]
     cw = ind["channel_width"][i]
     cw_avg = ind["channel_width_avg"][i]
 
     # All required values must be present
-    if any(v is None for v in (ema_h, ema_l, ema_t, atr_v, cw, cw_avg)):
+    if any(v is None for v in (
+        ema_h_now, ema_l_now, ema_t_now,
+        ema_h_prev, ema_l_prev, ema_t_prev,
+        atr_v, cw, cw_avg,
+    )):
         return None
 
     # Channel width filter (avoids ranging market)
@@ -74,30 +85,30 @@ def evaluate_entry(symbol: str, klines: List[Dict]) -> Optional[Signal]:
 
     close_price = closes[i]
 
-    # LONG: EMA7 closes above EMA100(High)
-    if ema_t > ema_h:
+    # LONG crossover: EMA7 was at/below EMA100(High), now above
+    if ema_t_prev <= ema_h_prev and ema_t_now > ema_h_now:
         return Signal(
             side="Buy",
             symbol=symbol,
             entry_price=close_price,
             atr=atr_v,
-            ema_high=ema_h,
-            ema_low=ema_l,
-            ema_trigger=ema_t,
+            ema_high=ema_h_now,
+            ema_low=ema_l_now,
+            ema_trigger=ema_t_now,
             channel_width=cw,
             channel_width_avg=cw_avg,
         )
 
-    # SHORT: EMA7 closes below EMA100(Low)
-    if ema_t < ema_l:
+    # SHORT crossover: EMA7 was at/above EMA100(Low), now below
+    if ema_t_prev >= ema_l_prev and ema_t_now < ema_l_now:
         return Signal(
             side="Sell",
             symbol=symbol,
             entry_price=close_price,
             atr=atr_v,
-            ema_high=ema_h,
-            ema_low=ema_l,
-            ema_trigger=ema_t,
+            ema_high=ema_h_now,
+            ema_low=ema_l_now,
+            ema_trigger=ema_t_now,
             channel_width=cw,
             channel_width_avg=cw_avg,
         )
@@ -110,8 +121,8 @@ def check_reverse_signal(side: str, klines: List[Dict]) -> bool:
     Check if EMA7 has crossed the opposite EMA100 channel on the latest closed candle.
     Used to force-close positions when strategy reverses.
 
-    For a Long position: returns True if EMA7 < EMA100(Low).
-    For a Short position: returns True if EMA7 > EMA100(High).
+    For a Long position: returns True if EMA7 crossed BELOW EMA100(Low) on last candle.
+    For a Short position: returns True if EMA7 crossed ABOVE EMA100(High) on last candle.
     """
     if len(klines) < config.EMA_HIGH_PERIOD + 2:
         return False
@@ -125,12 +136,13 @@ def check_reverse_signal(side: str, klines: List[Dict]) -> bool:
     ema_t = indicators.ema(closes, config.EMA_TRIGGER_PERIOD)
 
     i = len(klines) - 1
-    if ema_h[i] is None or ema_l[i] is None or ema_t[i] is None:
+    j = i - 1
+    if any(v is None for v in (ema_h[i], ema_l[i], ema_t[i], ema_h[j], ema_l[j], ema_t[j])):
         return False
 
     if side == "Buy":
-        # Long position reverses if EMA7 dropped below EMA100(Low)
-        return ema_t[i] < ema_l[i]
+        # Long reverses on bearish crossover of EMA100(Low)
+        return ema_t[j] >= ema_l[j] and ema_t[i] < ema_l[i]
     else:
-        # Short position reverses if EMA7 rose above EMA100(High)
-        return ema_t[i] > ema_h[i]
+        # Short reverses on bullish crossover of EMA100(High)
+        return ema_t[j] <= ema_h[j] and ema_t[i] > ema_h[i]
