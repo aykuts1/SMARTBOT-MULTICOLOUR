@@ -5,6 +5,13 @@ Schedules:
   - Entry scan: every 5-min candle close (a few seconds after to ensure fresh data)
   - Exit scan: every 60 seconds (manages CE, stage transitions, external SL detection)
   - Daily summary: at UTC midnight
+
+Stage transitions (use extreme/peak price, not current):
+  Stage 0 → 1: peak profit >= +1.2%  →  move SL to +1% profit
+  Stage 1 → 2: peak profit >= +2 ATR →  move SL to +0.2 ATR profit, CE 2 ATR starts
+  Stage 2 → 3: peak profit >= +6 ATR →  CE narrows to 1 ATR, SL unchanged
+
+CE active only in Stage 2 and Stage 3.
 """
 import time
 import traceback
@@ -15,7 +22,14 @@ import config
 import strategy
 import telegram_bot as tg
 from bybit_client import BybitClient
-from position_manager import PositionManager, Position
+from position_manager import (
+    PositionManager,
+    Position,
+    STAGE_ENTRY,
+    STAGE_1_PCT,
+    STAGE_2_ATR,
+    STAGE_3_ATR,
+)
 
 
 # ============================================================
@@ -36,27 +50,32 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def compute_sl_price(side: str, entry_price: float, sl_pct: float) -> float:
-    """Compute SL price given entry side and percentage."""
+def compute_initial_sl(side: str, entry_price: float, sl_pct: float) -> float:
+    """Loss-side SL at entry (%1 below entry for long, above for short)."""
     if side == "Buy":
         return entry_price * (1 - sl_pct)
     else:
         return entry_price * (1 + sl_pct)
 
 
-def compute_stage2_sl(side: str, entry_price: float, profit_pct: float) -> float:
-    """SL moves to +profit_pct on entry price."""
+def compute_pct_profit_sl(side: str, entry_price: float, profit_pct: float) -> float:
+    """SL at +profit_pct% profit (Stage 1)."""
     if side == "Buy":
         return entry_price * (1 + profit_pct)
     else:
         return entry_price * (1 - profit_pct)
 
 
+def compute_atr_profit_sl(side: str, entry_price: float, sl_atr: float, atr: float) -> float:
+    """SL at +sl_atr ATR profit (Stage 2)."""
+    if side == "Buy":
+        return entry_price + sl_atr * atr
+    else:
+        return entry_price - sl_atr * atr
+
+
 def get_closed_pnl(client: BybitClient, symbol: str) -> tuple:
-    """
-    Fetch most recent closed PnL for a symbol.
-    Returns (exit_price, pnl_usdt) or (None, 0).
-    """
+    """Fetch most recent closed PnL. Returns (exit_price, pnl_usdt) or (None, 0)."""
     try:
         resp = client.session.get_closed_pnl(
             category=config.CATEGORY,
@@ -76,7 +95,6 @@ def get_closed_pnl(client: BybitClient, symbol: str) -> tuple:
 
 
 def record_trade(pnl: float) -> None:
-    """Update daily stats."""
     today = utc_now().date()
     if DAILY_STATS["date"] != today:
         DAILY_STATS["date"] = today
@@ -93,13 +111,13 @@ def record_trade(pnl: float) -> None:
 # POSITION OPENING
 # ============================================================
 def open_position(client: BybitClient, pm: PositionManager, signal: strategy.Signal) -> None:
-    """Place market order with attached %1 SL and record the position."""
+    """Place market order with attached %1 SL. Route specific errors to info notifications."""
     symbol = signal.symbol
     side = signal.side
     entry_ref = signal.entry_price
 
     try:
-        # Ensure isolated + leverage set
+        # Set isolated + leverage (may raise 110013 if leverage too high for this coin)
         client.set_isolated_margin(symbol, config.LEVERAGE)
         client.set_leverage(symbol, config.LEVERAGE)
 
@@ -113,9 +131,9 @@ def open_position(client: BybitClient, pm: PositionManager, signal: strategy.Sig
             print(f"[SKIP] {symbol} qty {qty} below min {info['min_qty']}")
             return
 
-        sl_price = compute_sl_price(side, entry_ref, config.INITIAL_SL_PERCENT)
+        sl_price = compute_initial_sl(side, entry_ref, config.INITIAL_SL_PERCENT)
 
-        # Place market order with attached SL
+        # Place market order with attached SL (may raise 110007 if insufficient balance)
         client.place_market_order(
             symbol=symbol,
             side=side,
@@ -134,11 +152,11 @@ def open_position(client: BybitClient, pm: PositionManager, signal: strategy.Sig
         actual_qty = float(pos.get("size", qty) or qty)
 
         # Recompute SL based on actual entry and update on exchange
-        actual_sl = compute_sl_price(side, actual_entry, config.INITIAL_SL_PERCENT)
+        actual_sl = compute_initial_sl(side, actual_entry, config.INITIAL_SL_PERCENT)
         try:
             client.update_stop_loss(symbol, actual_sl)
         except Exception:
-            # If recomputed SL fails to update, the initial one (from order) is already there
+            # Initial SL from order placement is already in place
             pass
 
         position = Position(
@@ -150,7 +168,7 @@ def open_position(client: BybitClient, pm: PositionManager, signal: strategy.Sig
             leverage=config.LEVERAGE,
             atr_at_entry=signal.atr,
             open_time=now_ts(),
-            stage=0,
+            stage=STAGE_ENTRY,
             ce_level=None,
             current_sl=actual_sl,
             extreme_price=actual_entry,
@@ -170,6 +188,18 @@ def open_position(client: BybitClient, pm: PositionManager, signal: strategy.Sig
         print(f"[OPEN] {symbol} {side} @ {actual_entry} qty={actual_qty} sl={actual_sl}")
 
     except Exception as e:
+        msg = str(e)
+        # Insufficient balance → info notification, not error
+        if "110007" in msg:
+            tg.send_insufficient_balance(symbol, side)
+            print(f"[SKIP] {symbol} {side}: insufficient balance")
+            return
+        # Leverage limit exceeded → info notification, not error
+        if "110013" in msg:
+            tg.send_leverage_rejected(symbol, side, config.LEVERAGE)
+            print(f"[SKIP] {symbol} {side}: leverage limit")
+            return
+        # Other failures → real error
         tb = traceback.format_exc()
         print(f"[ERR] open_position {symbol}: {e}\n{tb}")
         tg.send_error(f"İşlem açılamadı: {symbol} {side}", str(e))
@@ -185,46 +215,35 @@ def close_position(client: BybitClient, pm: PositionManager, symbol: str, reason
         return
 
     try:
-        # Verify position still open on exchange
         ex_pos = client.get_position(symbol)
         if ex_pos is None:
-            # Already closed externally - just record
+            # Already closed externally
             exit_price, pnl = get_closed_pnl(client, symbol)
             if exit_price is None:
                 exit_price = pos.entry_price
             pnl_pct = (pnl / pos.stake_usdt * 100) if pos.stake_usdt else 0
             tg.send_exit(
-                symbol=symbol,
-                side=pos.side,
-                entry_price=pos.entry_price,
-                exit_price=exit_price,
-                pnl_usdt=pnl,
-                pnl_pct=pnl_pct,
-                reason=reason,
+                symbol=symbol, side=pos.side,
+                entry_price=pos.entry_price, exit_price=exit_price,
+                pnl_usdt=pnl, pnl_pct=pnl_pct, reason=reason,
             )
             record_trade(pnl)
             pm.close(symbol)
             return
 
-        # Send opposite market order
         actual_qty = float(ex_pos.get("size", pos.qty))
         client.close_position(symbol, pos.side, actual_qty)
         time.sleep(1.2)
 
-        # Fetch closed pnl
         exit_price, pnl = get_closed_pnl(client, symbol)
         if exit_price is None:
             exit_price = client.get_last_price(symbol)
         pnl_pct = (pnl / pos.stake_usdt * 100) if pos.stake_usdt else 0
 
         tg.send_exit(
-            symbol=symbol,
-            side=pos.side,
-            entry_price=pos.entry_price,
-            exit_price=exit_price,
-            pnl_usdt=pnl,
-            pnl_pct=pnl_pct,
-            reason=reason,
+            symbol=symbol, side=pos.side,
+            entry_price=pos.entry_price, exit_price=exit_price,
+            pnl_usdt=pnl, pnl_pct=pnl_pct, reason=reason,
         )
         record_trade(pnl)
         pm.close(symbol)
@@ -246,23 +265,23 @@ def entry_scan(client: BybitClient, pm: PositionManager) -> None:
 
     for symbol in config.SYMBOLS:
         try:
-            time.sleep(0.25)  # Rate limit: ~4 req/sec across 40 coins
+            time.sleep(0.25)  # Rate limit
             klines = client.get_klines(symbol, config.TIMEFRAME, config.KLINE_LIMIT)
+            # Strip current open (unclosed) candle - signal must come from closed candle
+            if len(klines) >= 2:
+                klines = klines[:-1]
             scanned += 1
             if len(klines) < config.EMA_HIGH_PERIOD + config.CHANNEL_AVG_PERIOD:
                 continue
 
-            # First: if we have an open position on this symbol, check reverse signal
+            # If we have an open position, check reverse signal first
             if pm.has(symbol):
                 pos = pm.get(symbol)
                 last_candle_start = klines[-1]["start"]
-                # Only check once per candle
                 if pos.last_reverse_check_candle != last_candle_start:
                     pos.last_reverse_check_candle = last_candle_start
                     if strategy.check_reverse_signal(pos.side, klines):
                         close_position(client, pm, symbol, "Ters Sinyal (EMA7 kanalı ters yönde kesti)")
-                        # After close, fall through to check if a new entry signal exists
-                        # (in the opposite direction)
 
             # Don't open new position if symbol already has one
             if pm.has(symbol):
@@ -276,12 +295,10 @@ def entry_scan(client: BybitClient, pm: PositionManager) -> None:
             if signal is not None:
                 signals_found.append(f"{symbol}({'L' if signal.side == 'Buy' else 'S'})")
                 open_position(client, pm, signal)
-                # Small delay between order placements
                 time.sleep(0.3)
 
         except Exception as e:
             print(f"[ERR] entry_scan {symbol}: {e}")
-            # Don't spam telegram - log only
             continue
 
     tg.send_scan_summary(scanned, signals_found, pm.count(), config.MAX_POSITIONS)
@@ -296,7 +313,7 @@ def exit_scan(client: BybitClient, pm: PositionManager) -> None:
 
     for symbol, pos in list(pm.all().items()):
         try:
-            # Verify position still open on exchange
+            # Check if position still open on exchange
             ex_pos = client.get_position(symbol)
             if ex_pos is None:
                 # External close (SL hit on exchange)
@@ -304,62 +321,62 @@ def exit_scan(client: BybitClient, pm: PositionManager) -> None:
                 if exit_price is None:
                     exit_price = pos.current_sl
                 pnl_pct = (pnl / pos.stake_usdt * 100) if pos.stake_usdt else 0
-                reason = "Stop Loss (Borsa)"
                 tg.send_exit(
-                    symbol=symbol,
-                    side=pos.side,
-                    entry_price=pos.entry_price,
-                    exit_price=exit_price,
-                    pnl_usdt=pnl,
-                    pnl_pct=pnl_pct,
-                    reason=reason,
+                    symbol=symbol, side=pos.side,
+                    entry_price=pos.entry_price, exit_price=exit_price,
+                    pnl_usdt=pnl, pnl_pct=pnl_pct, reason="Stop Loss (Borsa)",
                 )
                 record_trade(pnl)
                 pm.close(symbol)
                 print(f"[EXIT-SL] {symbol} pnl={pnl:.2f}")
                 continue
 
-            # Get current price
+            # Get current price, update extreme
             price = client.get_last_price(symbol)
             pos.update_extreme(price)
 
-            # Stage 0 → 1: at +1 ATR profit
-            if pos.stage == 0:
-                if pos.profit_in_atr(price) >= config.STAGE1_TRIGGER_ATR:
-                    pos.stage = 1
-                    pos.ce_level = pos.compute_ce(config.STAGE1_CE_TRAIL_ATR)
-                    tg.send_stage1(
-                        symbol=symbol,
-                        side=pos.side,
-                        price=price,
-                        ce_level=pos.ce_level,
-                        atr_value=pos.atr_at_entry,
-                    )
-                    print(f"[STAGE1] {symbol} ce={pos.ce_level}")
+            # Peak-based profit measurements for stage transitions
+            peak_profit_pct = pos.profit_pct_at(pos.extreme_price)
+            peak_profit_atr = pos.profit_atr_at(pos.extreme_price)
 
-            # Stage 1 → 2: at +1.2% profit
-            if pos.stage == 1:
-                if pos.profit_pct(price) >= config.STAGE2_TRIGGER_PCT:
-                    pos.stage = 2
-                    new_sl = compute_stage2_sl(pos.side, pos.entry_price, config.STAGE2_SL_PCT)
-                    try:
-                        client.update_stop_loss(symbol, new_sl)
-                        pos.current_sl = new_sl
-                        tg.send_stage2(
-                            symbol=symbol,
-                            side=pos.side,
-                            price=price,
-                            new_sl=new_sl,
-                            profit_pct=pos.profit_pct(price),
-                        )
-                        print(f"[STAGE2] {symbol} sl={new_sl}")
-                    except Exception as e:
-                        print(f"[ERR] update SL {symbol}: {e}")
-                        tg.send_error(f"SL güncellenemedi: {symbol}", str(e))
+            # ----- Stage 0 → 1: +1.2% peak → SL to +1% profit -----
+            if pos.stage == STAGE_ENTRY and peak_profit_pct >= config.STAGE1_TRIGGER_PCT:
+                new_sl = compute_pct_profit_sl(pos.side, pos.entry_price, config.STAGE1_SL_PCT)
+                try:
+                    client.update_stop_loss(symbol, new_sl)
+                    pos.current_sl = new_sl
+                    pos.stage = STAGE_1_PCT
+                    tg.send_stage1(symbol, pos.side, price, new_sl, peak_profit_pct)
+                    print(f"[STAGE1] {symbol} sl={new_sl}")
+                except Exception as e:
+                    print(f"[ERR] Stage1 SL update {symbol}: {e}")
+                    tg.send_error(f"Aşama 1 SL güncellenemedi: {symbol}", str(e))
 
-            # CE recompute (Stage 1 or 2): trail 1 ATR behind extreme
-            if pos.stage >= 1:
-                pos.ce_level = pos.compute_ce(config.STAGE1_CE_TRAIL_ATR)
+            # ----- Stage 1 → 2: +2 ATR peak → SL to +0.2 ATR, CE 2 ATR -----
+            if pos.stage == STAGE_1_PCT and peak_profit_atr >= config.STAGE2_TRIGGER_ATR:
+                new_sl = compute_atr_profit_sl(pos.side, pos.entry_price,
+                                               config.STAGE2_SL_ATR, pos.atr_at_entry)
+                try:
+                    client.update_stop_loss(symbol, new_sl)
+                    pos.current_sl = new_sl
+                    pos.stage = STAGE_2_ATR
+                    pos.ce_level = pos.compute_ce()  # 2 ATR trail from extreme
+                    tg.send_stage2(symbol, pos.side, price, new_sl, pos.ce_level, pos.atr_at_entry)
+                    print(f"[STAGE2] {symbol} sl={new_sl} ce={pos.ce_level}")
+                except Exception as e:
+                    print(f"[ERR] Stage2 SL update {symbol}: {e}")
+                    tg.send_error(f"Aşama 2 SL güncellenemedi: {symbol}", str(e))
+
+            # ----- Stage 2 → 3: +6 ATR peak → CE narrows to 1 ATR -----
+            if pos.stage == STAGE_2_ATR and peak_profit_atr >= config.STAGE3_TRIGGER_ATR:
+                pos.stage = STAGE_3_ATR
+                pos.ce_level = pos.compute_ce()  # 1 ATR trail from extreme
+                tg.send_stage3(symbol, pos.side, price, pos.ce_level, pos.atr_at_entry)
+                print(f"[STAGE3] {symbol} ce={pos.ce_level}")
+
+            # ----- CE recompute (Stage 2 or 3): trail from updated extreme -----
+            if pos.stage >= STAGE_2_ATR:
+                pos.ce_level = pos.compute_ce()
                 if pos.ce_hit(price):
                     close_position(client, pm, symbol, "Chandelier Exit (CE)")
 
@@ -375,14 +392,12 @@ def maybe_send_daily_summary(last_sent_date) -> object:
     today = utc_now().date()
     if last_sent_date == today:
         return last_sent_date
-    # Send summary for previous day at first UTC tick of new day
     if DAILY_STATS["date"] is not None and DAILY_STATS["date"] != today and DAILY_STATS["trades"] > 0:
         tg.send_daily_summary(
             total_pnl=DAILY_STATS["pnl"],
             trade_count=DAILY_STATS["trades"],
             win_count=DAILY_STATS["wins"],
         )
-        # Reset
         DAILY_STATS["date"] = today
         DAILY_STATS["pnl"] = 0.0
         DAILY_STATS["trades"] = 0
@@ -394,7 +409,6 @@ def maybe_send_daily_summary(last_sent_date) -> object:
 # STARTUP
 # ============================================================
 def startup(client: BybitClient) -> None:
-    """Validate config, fetch balance, compute stake, send start tg."""
     global STAKE_USDT
     config.validate_config()
     balance = client.get_total_balance_usdt()
@@ -431,8 +445,6 @@ def main():
     last_entry_scan_slot = -1
     last_exit_scan = 0.0
     last_daily_summary_date = utc_now().date()
-
-    # Initialize daily stats for today
     DAILY_STATS["date"] = utc_now().date()
 
     print("[LOOP] entering main loop")
@@ -441,19 +453,19 @@ def main():
         try:
             now = now_ts()
 
-            # ----- Entry scan: once per 5min candle, ~5s after close -----
+            # Entry scan: once per 5min candle, ~5s after close
             slot = int(now // 300)
             seconds_into_slot = now - (slot * 300)
             if slot > last_entry_scan_slot and seconds_into_slot >= 5:
                 entry_scan(client, pm)
                 last_entry_scan_slot = slot
 
-            # ----- Exit scan: every 60s -----
+            # Exit scan: every 60s
             if now - last_exit_scan >= config.EXIT_SCAN_INTERVAL:
                 exit_scan(client, pm)
                 last_exit_scan = now
 
-            # ----- Daily summary at UTC midnight -----
+            # Daily summary at UTC midnight
             last_daily_summary_date = maybe_send_daily_summary(last_daily_summary_date)
 
             time.sleep(2)
