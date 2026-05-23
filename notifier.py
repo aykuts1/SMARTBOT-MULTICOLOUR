@@ -96,7 +96,6 @@ class Notifier:
             f"• Band Carpani: {cfg.band_multiplier}",
             f"• Tampon Carpani: {cfg.buffer_multiplier}",
             f"• CE1: {cfg.ce1_atr} ATR / Takip: {cfg.ce1_trail} ATR",
-            f"• CE2: {cfg.ce2_atr} ATR / Takip: {cfg.ce2_trail} ATR",
             f"• Winrate: {cfg.winrate_atr} ATR / Takip: {cfg.winrate_trail} ATR",
             f"• Coin Sayisi: {len(cfg.coins)}",
         ]
