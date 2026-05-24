@@ -63,11 +63,18 @@ class EntryThread(threading.Thread):
                 notifier.send(msg_error(self.name, coin, "Coin Tarama Hatasi", str(e)))
 
     def scan_coin(self, coin: str):
-        # 1. Guncel fiyat
-        price = self.bybit.get_price(coin)
+        # Cache'den fiyat ve kline oku
+        price = state.get_cached_price(coin)
+        klines = state.get_cached_klines(coin)
 
-        # 2. Klines + bant
-        klines = self.bybit.get_klines(coin, self.timeframe, limit=200)
+        # Cache hazir degilse (fetcher henuz yazmadi) atla
+        if price is None or klines is None:
+            return
+
+        # Cache eskimisse (15 sn'den fazla) atla — fetcher sorun yasiyor olabilir
+        if state.get_cache_age(coin) > 15:
+            return
+
         bands = calculate_bands(klines, self.config)
 
         # 3. Fiyat hafizasi ekle (lookback icin onceki fiyatlar lazim — eklemeden ONCE oku)
@@ -175,9 +182,8 @@ class EntryThread(threading.Thread):
                 return
 
             # Eski pozisyon K/Z hesabi
-            try:
-                exit_price = self.bybit.get_price(coin)
-            except Exception:
+            exit_price = state.get_cached_price(coin)
+            if exit_price is None:
                 exit_price = existing["entry_price"]
             entry = existing["entry_price"]
             qty_old = existing["qty"]
@@ -214,8 +220,10 @@ class EntryThread(threading.Thread):
 
         # Islem hacmi ve miktari
         volume = stake * self.leverage
+        price = state.get_cached_price(coin)
+        if price is None:
+            return  # Cache yok, atla
         try:
-            price = self.bybit.get_price(coin)
             info = self.bybit.get_instrument_info(coin)
         except Exception as e:
             notifier.send(msg_error(self.name, coin, "Sembol Bilgi Hatasi", str(e)))
