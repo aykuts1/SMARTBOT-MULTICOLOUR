@@ -14,6 +14,7 @@ from datetime import datetime
 from state import state
 from bybit_client import BybitClient
 from telegram_notifier import notifier, msg_bot_started
+from fetcher import FetcherThread
 from entry import EntryThread
 from exit import ExitThread
 from report import ReportThread
@@ -70,8 +71,9 @@ def main():
     signal.signal(signal.SIGINT, handle_shutdown)
     signal.signal(signal.SIGTERM, handle_shutdown)
 
-    # 7. Threadleri olustur
+    # 7. Threadleri olustur — Fetcher EN BASTA, digerleri onun verisini kullaniyor
     threads = [
+        FetcherThread(config, bybit, stop_event),
         EntryThread("kirmizi", config, bybit, stop_event),
         EntryThread("mavi", config, bybit, stop_event),
         ExitThread("kirmizi", config, bybit, stop_event),
