@@ -22,6 +22,13 @@ class BotState:
         self.stake: float = 0.0
         self.leverage: int = 20
 
+        # ──────────────────────────────────────────
+        # VERI CACHE (Fetcher thread tarafindan doldurulur)
+        # ──────────────────────────────────────────
+        self.kline_cache: Dict[str, list] = {}        # coin -> klines listesi
+        self.price_cache: Dict[str, float] = {}       # coin -> son fiyat
+        self.cache_updated_at: Dict[str, datetime] = {}  # coin -> son guncelleme zamani
+
         # Flagler — yapi: {coin: {"kirmizi_long": bool, "kirmizi_short": bool, "mavi_long": bool, "mavi_short": bool}}
         self.flags: Dict[str, Dict[str, bool]] = {}
 
@@ -137,6 +144,33 @@ class BotState:
             for flags in self.flags.values():
                 count += sum(1 for v in flags.values() if v)
             return count
+
+    # ──────────────────────────────────────────
+    # VERI CACHE (Fetcher thread tarafindan doldurulur)
+    # ──────────────────────────────────────────
+
+    def set_cached_data(self, coin: str, klines: list, price: float):
+        """Fetcher thread bu metodu cagirir."""
+        with self.lock:
+            self.kline_cache[coin] = klines
+            self.price_cache[coin] = price
+            self.cache_updated_at[coin] = datetime.now()
+
+    def get_cached_klines(self, coin: str) -> Optional[list]:
+        with self.lock:
+            return self.kline_cache.get(coin)
+
+    def get_cached_price(self, coin: str) -> Optional[float]:
+        with self.lock:
+            return self.price_cache.get(coin)
+
+    def get_cache_age(self, coin: str) -> float:
+        """Cache kac saniye onceden — yoksa cok yuksek deger."""
+        with self.lock:
+            updated = self.cache_updated_at.get(coin)
+            if updated is None:
+                return float("inf")
+            return (datetime.now() - updated).total_seconds()
 
     # ──────────────────────────────────────────
     # FIYAT HAFIZASI
