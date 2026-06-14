@@ -95,7 +95,7 @@ class BybitClient:
             reduceOnly=reduce_only,
             stopLoss=str(round(sl_price, 8)),
             slTriggerBy="MarkPrice",
-            positionIdx=0,  # One-way mode
+            positionIdx=1 if side == "Buy" else 2,
         )
         resp = self.client.place_order(**params)
         return resp["result"]
@@ -110,7 +110,7 @@ class BybitClient:
             qty=str(qty),
             timeInForce="GTC",
             reduceOnly=True,
-            positionIdx=0,
+            positionIdx=2 if close_side == "Buy" else 1,
         )
         return resp["result"]
 
