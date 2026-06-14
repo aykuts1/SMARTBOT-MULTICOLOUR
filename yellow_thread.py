@@ -137,6 +137,7 @@ class YellowThread:
 
     def _open_trade(self, direction: str, bands: dict, entry_band_idx: int):
         try:
+            self.balance = self.client.get_balance()
             qty = self._calc_qty(bands, direction)
             side = "Sell" if direction == "short" else "Buy"
             price = self.feed.get_price(self.symbol) or 0
@@ -236,7 +237,7 @@ class YellowThread:
         try:
             side = "Sell" if t.direction == "short" else "Buy"
             self.client.place_market_close(self.symbol, side, self._qty)
-            self.client.cancel_sl(self.symbol)
+            self.client.cancel_sl(self.symbol, side)
 
             pnl = self._calc_pnl(self._entry_price, close_price, self._qty, t.direction)
             pnl_pct = (pnl / (self._qty * self._entry_price / self.config["trading"]["leverage"])) * 100

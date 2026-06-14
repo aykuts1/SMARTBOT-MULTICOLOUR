@@ -150,6 +150,7 @@ class RedThread:
             self.client.set_leverage(self.symbol, self.config["trading"]["leverage"])
             self.client.set_cross_margin(self.symbol)
 
+            self.balance = self.client.get_balance()
             qty = self._calc_qty(bands, direction)
             side = "Sell" if direction == "short" else "Buy"
             sl_pct = self.config["trading"]["sl_pct"]
@@ -226,7 +227,7 @@ class RedThread:
         try:
             side = "Sell" if t.direction == "short" else "Buy"
             self.client.place_market_close(self.symbol, side, t.qty)
-            self.client.cancel_sl(self.symbol)
+            self.client.cancel_sl(self.symbol, side)
 
             pnl = self._calc_pnl(t.entry_price, close_price, t.qty, t.direction)
             pnl_pct = (pnl / (t.qty * t.entry_price / self.config["trading"]["leverage"])) * 100

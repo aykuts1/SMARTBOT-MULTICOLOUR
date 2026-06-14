@@ -109,6 +109,7 @@ class BlueThread:
 
     def _open_trade(self):
         try:
+            self.balance = self.client.get_balance()
             qty = self._calc_qty()
             side = "Buy" if self.table.direction == "long" else "Sell"
             price = self.feed.get_price(self.symbol) or 0
@@ -168,7 +169,7 @@ class BlueThread:
         try:
             side = "Buy" if self.table.direction == "long" else "Sell"
             self.client.place_market_close(self.symbol, side, self._qty)
-            self.client.cancel_sl(self.symbol)
+            self.client.cancel_sl(self.symbol, side)
 
             pnl = self._calc_pnl(self._entry_price, close_price, self._qty, self.table.direction)
             pnl_pct = (pnl / (self._qty * self._entry_price / self.config["trading"]["leverage"])) * 100

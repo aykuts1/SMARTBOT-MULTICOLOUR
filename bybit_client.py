@@ -114,9 +114,16 @@ class BybitClient:
         )
         return resp["result"]
 
-    def cancel_sl(self, symbol: str):
+    def cancel_sl(self, symbol: str, side: str):
         try:
-            self.client.cancel_all_orders(category="linear", symbol=symbol, orderFilter="StopOrder")
+            open_orders = self.client.get_open_orders(
+                category="linear", symbol=symbol, orderFilter="StopOrder"
+            )
+            for order in open_orders["result"]["list"]:
+                if order.get("side") == side:
+                    self.client.cancel_order(
+                        category="linear", symbol=symbol, orderId=order["orderId"]
+                    )
         except Exception:
             pass
 
