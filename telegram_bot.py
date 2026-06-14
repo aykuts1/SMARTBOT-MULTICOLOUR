@@ -273,11 +273,11 @@ class TelegramNotifier:
 
     def _report_hourly(self):
         flag_lines   = [f"  • `{v['symbol']}` {v['direction'].upper()} [{v['thread']}]"
-                        for v in self._open_flags.values()]
+                        for v in list(self._open_flags.values())]
         trade_lines  = [f"  • `{v['symbol']}` {v['direction'].upper()} [{v['thread']}] @ `{v['entry']}`"
-                        for v in self._open_trades.values()]
+                        for v in list(self._open_trades.values())]
         closed_lines = [f"  • `{t['symbol']}` {t['direction'].upper()} [{t['thread']}] `{t['pnl']:+.2f}` ({t['reason']})"
-                        for t in self._closed_trades[-10:]]
+                        for t in list(self._closed_trades[-10:])]
 
         msg = (
             f"📊 *1 Saatlik Rapor*\n\n"
@@ -311,8 +311,8 @@ class TelegramNotifier:
 
         def wr(s): return f"{(s['w'] / (s['w']+s['l']) * 100):.0f}" if (s['w']+s['l']) else "0"
 
-        flag_lines   = [f"  • `{v['symbol']}` {v['direction'].upper()} [{v['thread']}]"          for v in self._open_flags.values()]
-        trade_lines  = [f"  • `{v['symbol']}` {v['direction'].upper()} [{v['thread']}] @ `{v['entry']}`" for v in self._open_trades.values()]
+        flag_lines   = [f"  • `{v['symbol']}` {v['direction'].upper()} [{v['thread']}]"          for v in list(self._open_flags.values())]
+        trade_lines  = [f"  • `{v['symbol']}` {v['direction'].upper()} [{v['thread']}] @ `{v['entry']}`" for v in list(self._open_trades.values())]
         closed_lines = [f"  • `{t['symbol']}` {t['direction'].upper()} [{t['thread']}] `{t['pnl']:+.2f}` ({t['reason']})" for t in trades]
         thread_lines = [f"  `{th}`: `{s['pnl']:+.2f}` | {s['w']}W/{s['l']}L | WR%`{wr(s)}`" for th, s in thread_stats.items()]
         coin_lines   = [f"  `{cn}`: `{s['pnl']:+.2f}` | {s['w']}W/{s['l']}L | WR%`{wr(s)}`" for cn, s in coin_stats.items()]
@@ -367,8 +367,8 @@ class TelegramNotifier:
 
         def wr(s): return f"{(s['w'] / (s['w']+s['l']) * 100):.0f}" if (s['w']+s['l']) else "0"
 
-        flag_lines   = [f"  • `{v['symbol']}` {v['direction'].upper()} [{v['thread']}]"          for v in self._open_flags.values()]
-        trade_lines  = [f"  • `{v['symbol']}` {v['direction'].upper()} [{v['thread']}] @ `{v['entry']}`" for v in self._open_trades.values()]
+        flag_lines   = [f"  • `{v['symbol']}` {v['direction'].upper()} [{v['thread']}]"          for v in list(self._open_flags.values())]
+        trade_lines  = [f"  • `{v['symbol']}` {v['direction'].upper()} [{v['thread']}] @ `{v['entry']}`" for v in list(self._open_trades.values())]
         closed_lines = [f"  • `{t['symbol']}` {t['direction'].upper()} [{t['thread']}] `{t['pnl']:+.2f}` ({t['reason']})" for t in trades]
         thread_lines = [f"  `{th}`: `{s['pnl']:+.2f}` | {s['w']}W/{s['l']}L | WR%`{wr(s)}`" for th, s in thread_stats.items()]
         coin_lines   = [f"  `{cn}`: `{s['pnl']:+.2f}` | {s['w']}W/{s['l']}L | WR%`{wr(s)}`" for cn, s in coin_stats.items()]

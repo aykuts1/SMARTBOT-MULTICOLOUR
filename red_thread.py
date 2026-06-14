@@ -35,6 +35,7 @@ class RedThread:
         self.telegram = telegram
         self.on_open_callback = on_open_callback
         self.on_close_callback = on_close_callback
+        self.qty_step = self.client.get_qty_step(self.symbol)
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -260,8 +261,7 @@ class RedThread:
     def _calc_qty(self, bands: dict, direction: str = "short") -> float:
         notional = self.balance * self.config["trading"]["balance_pct"] * self.config["trading"]["leverage"]
         price = bands["lower"][1] if direction == "short" else bands["upper"][1]
-        raw = notional / price
-        return round(raw, 3)
+        return self.client.round_qty(notional / price, self.qty_step)
 
     @staticmethod
     def _calc_pnl(entry: float, close: float, qty: float, direction: str) -> float:

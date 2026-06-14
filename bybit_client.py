@@ -1,4 +1,5 @@
 import os
+import math
 from pybit.unified_trading import HTTP
 
 
@@ -13,6 +14,16 @@ class BybitClient:
     # ------------------------------------------------------------------ #
     #  Piyasa verisi                                                       #
     # ------------------------------------------------------------------ #
+
+    def get_qty_step(self, symbol: str) -> float:
+        resp = self.client.get_instruments_info(category="linear", symbol=symbol)
+        lot = resp["result"]["list"][0]["lotSizeFilter"]
+        return float(lot["qtyStep"])
+
+    @staticmethod
+    def round_qty(raw: float, step: float) -> float:
+        precision = len(str(step).rstrip("0").split(".")[-1]) if "." in str(step) else 0
+        return round(math.floor(raw / step) * step, precision)
 
     def get_klines(self, symbol: str, interval: str, limit: int = 200) -> list:
         resp = self.client.get_kline(

@@ -42,6 +42,7 @@ class YellowThread:
         self.feed = feed
         self.balance = balance
         self.telegram = telegram
+        self.qty_step = self.client.get_qty_step(self.symbol)
 
         self._running = False
         self._thread: threading.Thread | None = None
@@ -271,7 +272,7 @@ class YellowThread:
     def _calc_qty(self, bands: dict, direction: str) -> float:
         price = bands["lower"][1] if direction == "short" else bands["upper"][1]
         notional = self.balance * self.config["trading"]["balance_pct"] * self.config["trading"]["leverage"]
-        return round(notional / price, 3)
+        return self.client.round_qty(notional / price, self.qty_step)
 
     @staticmethod
     def _calc_pnl(entry: float, close: float, qty: float, direction: str) -> float:
