@@ -141,7 +141,7 @@ class RedThread:
             self.client.set_leverage(self.symbol, self.config["trading"]["leverage"])
             self.client.set_cross_margin(self.symbol)
 
-            qty = self._calc_qty(bands)
+            qty = self._calc_qty(bands, direction)
             side = "Sell" if direction == "short" else "Buy"
             sl_pct = self.config["trading"]["sl_pct"]
             entry = bands["lower"][1] if direction == "short" else bands["upper"][1]
@@ -249,9 +249,9 @@ class RedThread:
     #  Yardımcı metodlar                                                  #
     # ------------------------------------------------------------------ #
 
-    def _calc_qty(self, bands: dict) -> float:
+    def _calc_qty(self, bands: dict, direction: str = "short") -> float:
         notional = self.balance * self.config["trading"]["balance_pct"] * self.config["trading"]["leverage"]
-        price = bands["lower"][1] if bands else 1
+        price = bands["lower"][1] if direction == "short" else bands["upper"][1]
         raw = notional / price
         return round(raw, 3)
 
