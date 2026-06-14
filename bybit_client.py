@@ -115,12 +115,14 @@ class BybitClient:
         return resp["result"]
 
     def cancel_sl(self, symbol: str, side: str):
+        # SL emri pozisyonun ters tarafında durur (long → SL=Sell, short → SL=Buy)
+        sl_side = "Sell" if side == "Buy" else "Buy"
         try:
             open_orders = self.client.get_open_orders(
                 category="linear", symbol=symbol, orderFilter="StopOrder"
             )
             for order in open_orders["result"]["list"]:
-                if order.get("side") == side:
+                if order.get("side") == sl_side:
                     self.client.cancel_order(
                         category="linear", symbol=symbol, orderId=order["orderId"]
                     )
