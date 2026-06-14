@@ -38,8 +38,8 @@
       "d_smooth": 8                 // D Smoothing
     },
     "macd": {
-      "fast": 50,                   // Fast EMA periyodu
-      "slow": 21,                   // Slow EMA periyodu
+      "fast": 21,                   // Fast EMA periyodu
+      "slow": 50,                   // Slow EMA periyodu
       "signal": 9                   // Signal periyodu
     }
   },

@@ -89,11 +89,11 @@ class RedTable:
 @dataclass
 class BlueTable:
     """
-    Mavi hedge tablosu. Kırmızı/Yeşil işlem açılınca oluşur.
+    Mavi hedge tablosu. Kırmızı işlem açılınca oluşur.
     Giriş ↔ Lose Exit arasını 4 eşit zone'a böler.
     """
     symbol: str
-    direction: str          # "long" (kırmızı short için) | "short" (yeşil long için)
+    direction: str          # "long" (kırmızı long için) | "short" (kırmızı short için)
     parent_direction: str   # bağlı olduğu ana işlemin yönü
 
     zone1_low: float

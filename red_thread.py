@@ -111,11 +111,11 @@ class RedThread:
         # --- LONG FLAG ---
         if self._crossed_up(prev, price, u1):
             self.long_flag = True
-            self.telegram.flag_opened(self.symbol, "long", "yeşil")
+            self.telegram.flag_opened(self.symbol, "long", "kırmızı")
             logger.debug(f"[{self.symbol}] Long flag açıldı")
         if self._crossed_down(prev, price, u1) and self.long_flag:
             self.long_flag = False
-            self.telegram.flag_closed(self.symbol, "long", "yeşil")
+            self.telegram.flag_closed(self.symbol, "long", "kırmızı")
 
         # --- SHORT GİRİŞ ---
         if self.short_flag and self._crossed_down(prev, price, l2):
@@ -134,12 +134,12 @@ class RedThread:
             if self.semaphore.acquire(blocking=False):
                 self._acquired = True
                 self.long_flag = False
-                self.telegram.flag_closed(self.symbol, "long", "yeşil")
+                self.telegram.flag_closed(self.symbol, "long", "kırmızı")
                 self._open_trade("long", bands)
             else:
                 self.telegram.send(f"⛔ Slot dolu — {self.symbol} long açılamadı (10 coin limiti)")
                 self.long_flag = False
-                self.telegram.flag_closed(self.symbol, "long", "yeşil")
+                self.telegram.flag_closed(self.symbol, "long", "kırmızı")
 
     # ------------------------------------------------------------------ #
     #  İşlem aç                                                           #
@@ -167,7 +167,7 @@ class RedThread:
             self.telegram.trade_opened(
                 symbol=self.symbol,
                 direction=direction,
-                thread="kırmızı" if direction == "short" else "yeşil",
+                thread="kırmızı" if direction == "short" else "kırmızı",
                 entry_price=entry,
                 qty=qty,
                 sl_price=sl_price,
@@ -237,7 +237,7 @@ class RedThread:
             self.telegram.trade_closed(
                 symbol=self.symbol,
                 direction=t.direction,
-                thread="kırmızı" if t.direction == "short" else "yeşil",
+                thread="kırmızı" if t.direction == "short" else "kırmızı",
                 close_price=close_price,
                 pnl=pnl,
                 pnl_pct=pnl_pct,
