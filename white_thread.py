@@ -120,11 +120,13 @@ class WhiteThread:
                 self._flag_direction = "short"
                 self._flag_triggered_by = "stoch" if stoch_down else "macd"
                 self._flag_candle_count = 0
+                self.telegram.flag_opened(self.symbol, "short", "beyaz")
             elif stoch_up or macd_up:
                 self._white_flag = True
                 self._flag_direction = "long"
                 self._flag_triggered_by = "stoch" if stoch_up else "macd"
                 self._flag_candle_count = 0
+                self.telegram.flag_opened(self.symbol, "long", "beyaz")
         else:
             self._flag_candle_count += 1
 
@@ -149,6 +151,8 @@ class WhiteThread:
                     self._clear_flag()
 
     def _clear_flag(self):
+        if self._white_flag and self._flag_direction:
+            self.telegram.flag_closed(self.symbol, self._flag_direction, "beyaz")
         self._white_flag = False
         self._flag_direction = None
         self._flag_triggered_by = None

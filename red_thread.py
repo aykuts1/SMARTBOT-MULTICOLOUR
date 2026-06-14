@@ -101,36 +101,44 @@ class RedThread:
         # --- SHORT FLAG ---
         if self._crossed_down(prev, price, l1):
             self.short_flag = True
+            self.telegram.flag_opened(self.symbol, "short", "kırmızı")
             logger.debug(f"[{self.symbol}] Short flag açıldı")
-        if self._crossed_up(prev, price, l1):
+        if self._crossed_up(prev, price, l1) and self.short_flag:
             self.short_flag = False
+            self.telegram.flag_closed(self.symbol, "short", "kırmızı")
 
         # --- LONG FLAG ---
         if self._crossed_up(prev, price, u1):
             self.long_flag = True
+            self.telegram.flag_opened(self.symbol, "long", "yeşil")
             logger.debug(f"[{self.symbol}] Long flag açıldı")
-        if self._crossed_down(prev, price, u1):
+        if self._crossed_down(prev, price, u1) and self.long_flag:
             self.long_flag = False
+            self.telegram.flag_closed(self.symbol, "long", "yeşil")
 
         # --- SHORT GİRİŞ ---
         if self.short_flag and self._crossed_down(prev, price, l2):
             if self.semaphore.acquire(blocking=False):
                 self._acquired = True
                 self.short_flag = False
+                self.telegram.flag_closed(self.symbol, "short", "kırmızı")
                 self._open_trade("short", bands)
             else:
                 self.telegram.send(f"⛔ Slot dolu — {self.symbol} short açılamadı (10 coin limiti)")
                 self.short_flag = False
+                self.telegram.flag_closed(self.symbol, "short", "kırmızı")
 
         # --- LONG GİRİŞ ---
         elif self.long_flag and self._crossed_up(prev, price, u2):
             if self.semaphore.acquire(blocking=False):
                 self._acquired = True
                 self.long_flag = False
+                self.telegram.flag_closed(self.symbol, "long", "yeşil")
                 self._open_trade("long", bands)
             else:
                 self.telegram.send(f"⛔ Slot dolu — {self.symbol} long açılamadı (10 coin limiti)")
                 self.long_flag = False
+                self.telegram.flag_closed(self.symbol, "long", "yeşil")
 
     # ------------------------------------------------------------------ #
     #  İşlem aç                                                           #

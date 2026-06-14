@@ -70,7 +70,10 @@ class TradeBot:
             return
 
         self.feed.start()
-        self.telegram.start_scheduler(self.client.get_balance)
+        self.telegram.set_stop_callback(self.stop)
+        self.telegram.set_start_callback(self.start)
+        self.telegram.start_scheduler(self.client.get_balance, self.balance)
+        self.telegram.start_command_listener()
         self.telegram.bot_started(self.balance)
 
         for symbol in self.config["coins"]:
