@@ -44,6 +44,10 @@
     }
   },
 
+  "orange_ecosystem": {
+    "max_open_trades": 20         // Sistem genelinde aynı anda max açık Turuncu işlem sayısı
+  },
+
   "telegram": {
     "report_intervals": {
       "hourly_minutes": 60,      // 1 saatlik rapor aralığı (dakika)

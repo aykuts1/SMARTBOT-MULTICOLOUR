@@ -14,6 +14,8 @@ from blue_thread import BlueThread
 from yellow_thread import YellowThread
 from white_thread import WhiteThread
 from purple_thread import PurpleThread
+from orange_thread import OrangeThread
+from teal_thread import TealThread
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,8 +44,9 @@ class TradeBot:
         self.telegram = TelegramNotifier(self.config)
         self.balance = 0.0
 
-        self.coin_semaphore = threading.Semaphore(self.config["trading"]["max_open_coins"])
-        self.white_semaphore = threading.Semaphore(self.config["white_ecosystem"]["max_open_coins"])
+        self.coin_semaphore   = threading.Semaphore(self.config["trading"]["max_open_coins"])
+        self.white_semaphore  = threading.Semaphore(self.config["white_ecosystem"]["max_open_coins"])
+        self.orange_semaphore = threading.Semaphore(self.config["orange_ecosystem"]["max_open_trades"])
 
         # Her coin için thread yönetimi
         self.red_threads: dict[str, RedThread] = {}
@@ -52,6 +55,8 @@ class TradeBot:
         self.yellow2_threads: dict[str, YellowThread] = {}
         self.white_threads: dict[str, WhiteThread] = {}
         self.purple_threads: dict[str, PurpleThread] = {}
+        self.orange_threads: dict[str, list[OrangeThread]] = {}
+        self.teal_threads: dict[str, dict[str, TealThread]] = {}
 
         self._running = False
 
@@ -105,6 +110,24 @@ class TradeBot:
             self.white_threads[symbol] = wt
             wt.start()
 
+            self.orange_threads[symbol] = []
+            self.teal_threads[symbol] = {}
+            for label in ("turuncu1", "turuncu2", "turuncu3", "turuncu4"):
+                ot = OrangeThread(
+                    symbol=symbol,
+                    label=label,
+                    config=self.config,
+                    client=self.client,
+                    feed=self.feed,
+                    balance=self.balance,
+                    semaphore=self.orange_semaphore,
+                    telegram=self.telegram,
+                    on_open_callback=self._on_orange_opened,
+                    on_close_callback=self._on_orange_closed,
+                )
+                self.orange_threads[symbol].append(ot)
+                ot.start()
+
         logger.info(f"{len(self.config['coins'])} coin için thread'ler başlatıldı.")
 
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -131,6 +154,12 @@ class TradeBot:
             wt.stop()
         for pt in self.purple_threads.values():
             pt.stop()
+        for ot_list in self.orange_threads.values():
+            for ot in ot_list:
+                ot.stop()
+        for tt_dict in self.teal_threads.values():
+            for tt in tt_dict.values():
+                tt.stop()
 
         self.feed.stop()
         self.telegram.stop_scheduler()
@@ -201,6 +230,26 @@ class TradeBot:
         if symbol in self.purple_threads:
             self.purple_threads[symbol].stop()
             del self.purple_threads[symbol]
+
+    def _on_orange_opened(self, symbol: str, label: str, orange_table, teal_table):
+        teal_label = label.replace("turuncu", "turkuaz")
+        tt = TealThread(
+            symbol=symbol,
+            label=teal_label,
+            teal_table=teal_table,
+            config=self.config,
+            client=self.client,
+            feed=self.feed,
+            balance=self.balance,
+            telegram=self.telegram,
+        )
+        self.teal_threads[symbol][label] = tt
+        tt.start()
+
+    def _on_orange_closed(self, symbol: str, label: str):
+        if label in self.teal_threads.get(symbol, {}):
+            self.teal_threads[symbol][label].stop()
+            del self.teal_threads[symbol][label]
 
     def _on_red_closed(self, symbol: str, red_table: RedTable):
         if symbol in self.blue_threads:

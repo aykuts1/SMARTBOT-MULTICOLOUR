@@ -264,7 +264,7 @@ class YellowThread:
         finally:
             self._open = False
             self.yellow_table = None
-            self._running = False
+            self._ce_value = 0.0
 
     # ------------------------------------------------------------------ #
     #  Yardımcı                                                           #

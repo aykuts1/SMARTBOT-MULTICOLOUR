@@ -190,7 +190,7 @@ class BlueThread:
             self.telegram.error(f"{self.label} kapatma hatası [{self.symbol}]: {e}")
         finally:
             self._open = False
-            self._running = False
+            self.table.flag = False
 
     # ------------------------------------------------------------------ #
     #  Yardımcı                                                           #

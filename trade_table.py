@@ -275,6 +275,97 @@ class WhiteTable:
 
 
 @dataclass
+class OrangeTable:
+    """
+    Turuncu işlem tablosu. Her Turuncu thread açıldığında sabitlenir.
+    entry_idx: 1=Alt2/Üst2, 2=Alt3/Üst3, 3=Alt4/Üst4, 4=Alt5/Üst5
+    """
+    symbol: str
+    direction: str
+    label: str           # "turuncu1" | "turuncu2" | "turuncu3" | "turuncu4"
+    entry_price: float   # Giriş seviyesi
+    lose_exit: float     # Bir üst bant (SHORT zarar çizgisi)
+    winrate: float       # İki alt bant (SHORT kâr çizgisi)
+    qty: float = 0.0
+    order_id: str = ""
+
+    @classmethod
+    def from_bands(cls, symbol: str, direction: str, label: str,
+                   bands: dict, entry_idx: int, qty: float) -> "OrangeTable":
+        if direction == "short":
+            l = bands["lower"]
+            return cls(
+                symbol=symbol, direction=direction, label=label,
+                entry_price=l[entry_idx],
+                lose_exit=l[entry_idx - 1],
+                winrate=l[entry_idx + 2],
+                qty=qty,
+            )
+        else:
+            u = bands["upper"]
+            return cls(
+                symbol=symbol, direction=direction, label=label,
+                entry_price=u[entry_idx],
+                lose_exit=u[entry_idx - 1],
+                winrate=u[entry_idx + 2],
+                qty=qty,
+            )
+
+
+@dataclass
+class TealTable:
+    """
+    Turkuaz hedge tablosu. Her Turuncu açılışında oluşur.
+    Turuncu giriş ↔ Lose Exit arasını 4 eşit zone'a böler.
+    """
+    symbol: str
+    direction: str
+    parent_direction: str
+    entry_price: float   # Turuncu'nun giriş fiyatı (zone alt/üst sınırı)
+
+    zone1_low: float;  zone1_high: float
+    zone2_low: float;  zone2_high: float
+    zone3_low: float;  zone3_high: float
+    zone4_low: float;  zone4_high: float
+
+    qty: float = 0.0
+    order_id: str = ""
+    is_open: bool = False
+
+    @classmethod
+    def from_orange_table(cls, orange: "OrangeTable") -> "TealTable":
+        entry = orange.entry_price
+        lose  = orange.lose_exit
+        step  = abs(lose - entry) / 4
+
+        if orange.direction == "short":
+            # Teal LONG, zone'lar yukarı gider (entry → lose_exit)
+            z1_l = entry;      z1_h = entry + step
+            z2_l = z1_h;       z2_h = z1_h + step
+            z3_l = z2_h;       z3_h = z2_h + step
+            z4_l = z3_h;       z4_h = lose
+            hedge_dir = "long"
+        else:
+            # Teal SHORT, zone'lar aşağı gider (entry → lose_exit)
+            z1_h = entry;      z1_l = entry - step
+            z2_h = z1_l;       z2_l = z1_l - step
+            z3_h = z2_l;       z3_l = z2_l - step
+            z4_h = z3_l;       z4_l = lose
+            hedge_dir = "short"
+
+        return cls(
+            symbol=orange.symbol,
+            direction=hedge_dir,
+            parent_direction=orange.direction,
+            entry_price=entry,
+            zone1_low=z1_l,  zone1_high=z1_h,
+            zone2_low=z2_l,  zone2_high=z2_h,
+            zone3_low=z3_l,  zone3_high=z3_h,
+            zone4_low=z4_l,  zone4_high=z4_h,
+        )
+
+
+@dataclass
 class PurpleTable:
     """
     Mor hedge tablosu. Beyaz işlem açılınca oluşur.

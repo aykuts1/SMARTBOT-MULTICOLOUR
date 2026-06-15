@@ -17,8 +17,11 @@ class TelegramNotifier:
         self.chat_id = os.environ["TELEGRAM_CHAT_ID"]
         self.config = config
         self._bot = Bot(token=self.token)
-        self._lock = threading.Lock()
         self._scheduler = BackgroundScheduler()
+
+        self._sender_loop = None
+        self._async_queue = None
+        self._start_sender_thread()
 
         self._open_flags: dict = {}     # {key: {symbol, direction, thread}}
         self._open_trades: dict = {}    # {symbol_thread: {symbol, direction, thread, entry, qty, opened_at}}
@@ -31,6 +34,42 @@ class TelegramNotifier:
         self._stop_callback = None
         self._start_callback = None
         self._balance_getter = None
+
+    # ------------------------------------------------------------------ #
+    #  Telegram gönderici thread (kalıcı event loop)                     #
+    # ------------------------------------------------------------------ #
+
+    def _start_sender_thread(self):
+        ready = threading.Event()
+        t = threading.Thread(target=self._run_sender, args=(ready,), name="TelegramSender", daemon=True)
+        t.start()
+        ready.wait()
+
+    def _run_sender(self, ready: threading.Event):
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._sender_loop = loop
+        self._async_queue = asyncio.Queue()
+        ready.set()
+        loop.run_until_complete(self._sender_coro())
+
+    async def _sender_coro(self):
+        await self._bot.initialize()
+        while True:
+            text = await self._async_queue.get()
+            if text is None:
+                break
+            try:
+                await self._bot.send_message(
+                    chat_id=self.chat_id,
+                    text=text,
+                    parse_mode="Markdown",
+                )
+            except Exception as e:
+                logger.warning(f"Telegram gönderme hatası: {e}")
+            self._async_queue.task_done()
+        await self._bot.shutdown()
 
     # ------------------------------------------------------------------ #
     #  Zamanlayıcı                                                        #
@@ -242,20 +281,8 @@ class TelegramNotifier:
         self.send(msg)
 
     def send(self, text: str):
-        with self._lock:
-            try:
-                import asyncio
-                loop = asyncio.new_event_loop()
-                loop.run_until_complete(
-                    self._bot.send_message(
-                        chat_id=self.chat_id,
-                        text=text,
-                        parse_mode="Markdown",
-                    )
-                )
-                loop.close()
-            except Exception as e:
-                logger.warning(f"Telegram gönderme hatası: {e}")
+        if self._sender_loop is not None:
+            self._sender_loop.call_soon_threadsafe(self._async_queue.put_nowait, text)
 
     # ------------------------------------------------------------------ #
     #  Yardımcı                                                           #
