@@ -1,276 +1,504 @@
-import json
-import logging
-import signal
+import os
 import sys
+import time
+import json
 import threading
-from pathlib import Path
+import signal
+from datetime import datetime
 
+from logger_setup import setup_logger, get_logger
+from utils import load_config, get_config_mtime, format_usdt, format_duration, is_our_order
 from bybit_client import BybitClient
-from data_feed import DataFeed
-from trade_table import RedTable, BlueTable
-from telegram_bot import TelegramNotifier
-from red_thread import RedThread
-from blue_thread import BlueThread
-from yellow_thread import YellowThread
-from white_thread import WhiteThread
-from purple_thread import PurpleThread
-from orange_thread import OrangeThread
-from teal_thread import TealThread
+from websocket_client import WebSocketClient
+from data_pool import DataPool
+from indicators import compute_all_indicators
+from trade_executor import TradeExecutor
+from ecosystem_red import RedEcosystem
+from ecosystem_white import WhiteEcosystem
+from ecosystem_yellow import YellowEcosystem
+from ecosystem_black import BlackEcosystem
+from ecosystem_gold import GoldEcosystem
+from telegram_bot import TelegramBot
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
-logger = logging.getLogger("main")
+setup_logger()
+log = get_logger("main")
 
 
-def load_config() -> dict:
-    path = Path(__file__).parent / "config.json"
-    raw = ""
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            stripped = line.split("//")[0].rstrip()
-            if stripped:
-                raw += stripped + "\n"
-    return json.loads(raw)
-
-
-class TradeBot:
+class BotManager:
     def __init__(self):
         self.config = load_config()
-        self.client = BybitClient()
-        self.feed = DataFeed(self.config, self.client)
-        self.telegram = TelegramNotifier(self.config)
-        self.balance = 0.0
+        self.config_mtime = get_config_mtime()
+        self.running = False
+        self.start_time = 0
+        self.recent_events = []
 
-        self.coin_semaphore   = threading.Semaphore(self.config["trading"]["max_open_coins"])
-        self.white_semaphore  = threading.Semaphore(self.config["white_ecosystem"]["max_open_coins"])
-        self.orange_semaphore = threading.Semaphore(self.config["orange_ecosystem"]["max_open_trades"])
+        # Bileşenler
+        self.bybit = BybitClient()
+        self.data_pool = DataPool()
+        self.telegram = TelegramBot(bot_manager=self)
+        self.executor = TradeExecutor(self.bybit, self.config, self.telegram)
 
-        # Her coin için thread yönetimi
-        self.red_threads: dict[str, RedThread] = {}
-        self.blue_threads: dict[str, BlueThread] = {}
-        self.yellow1_threads: dict[str, YellowThread] = {}
-        self.yellow2_threads: dict[str, YellowThread] = {}
-        self.white_threads: dict[str, WhiteThread] = {}
-        self.purple_threads: dict[str, PurpleThread] = {}
-        self.orange_threads: dict[str, list[OrangeThread]] = {}
-        self.teal_threads: dict[str, dict[str, TealThread]] = {}
+        # Ekosistemler
+        self.ecosystems = {}
+        self._init_ecosystems()
 
-        self._running = False
+        # WebSocket
+        self.ws = None
 
-    # ------------------------------------------------------------------ #
-    #  Başlat / Durdur                                                    #
-    # ------------------------------------------------------------------ #
+        # Periyodik rapor zamanlayıcı
+        self._report_thread = None
+        self._health_thread = None
+        self._config_thread = None
+        self._stop_event = threading.Event()
 
-    def start(self):
-        self._running = True
-        self.balance = self.client.get_balance()
-        logger.info(f"Bakiye: {self.balance:.2f} USDT")
+    def _init_ecosystems(self):
+        cfg = self.config
+        self.ecosystems["kirmizi"] = RedEcosystem(
+            cfg.get("kirmizi", {}), self.data_pool, self.executor, self.telegram
+        )
+        self.ecosystems["beyaz"] = WhiteEcosystem(
+            cfg.get("beyaz", {}), self.data_pool, self.executor, self.telegram
+        )
+        self.ecosystems["sari"] = YellowEcosystem(
+            cfg.get("sari", {}), self.data_pool, self.executor, self.telegram
+        )
+        self.ecosystems["siyah"] = BlackEcosystem(
+            cfg.get("siyah", {}), self.data_pool, self.executor, self.telegram
+        )
+        self.ecosystems["gold"] = GoldEcosystem(
+            cfg.get("gold", {}), self.data_pool, self.executor, self.telegram
+        )
 
-        if self.balance < 10:
-            self.telegram.low_balance(self.balance)
-            logger.warning("Yetersiz bakiye, bot durduruluyor.")
+    # === ANA BAŞLATMA ===
+
+    def run(self):
+        log.info("=" * 60)
+        log.info("TRADE BOT BASLATILIYOR")
+        log.info("=" * 60)
+
+        # 1. Bybit bağlantı testi
+        if not self.bybit.test_connection():
+            log.critical("Bybit baglantisi kurulamadi!")
             return
 
-        self.feed.start()
-        self.telegram.set_stop_callback(self.stop)
-        self.telegram.set_start_callback(self.start)
-        self.telegram.start_scheduler(self.client.get_balance, self.balance)
-        self.telegram.start_command_listener()
-        self.telegram.bot_started(self.balance)
+        # 2. Coin listesi ve instrument bilgisi
+        coins = self.config["global"]["coin_listesi"]
+        self.bybit.load_instrument_info(coins)
 
-        for symbol in self.config["coins"]:
-            rt = RedThread(
-                symbol=symbol,
-                config=self.config,
-                client=self.client,
-                feed=self.feed,
-                balance=self.balance,
-                coin_semaphore=self.coin_semaphore,
-                telegram=self.telegram,
-                on_open_callback=self._on_red_opened,
-                on_close_callback=self._on_red_closed,
-            )
-            self.red_threads[symbol] = rt
-            rt.start()
+        # 3. Hesap ayarları (leverage, margin, position mode)
+        leverage = self.config["global"]["kaldirac"]
+        self.bybit.setup_account(coins, leverage)
 
-            wt = WhiteThread(
-                symbol=symbol,
-                config=self.config,
-                client=self.client,
-                feed=self.feed,
-                balance=self.balance,
-                coin_semaphore=self.white_semaphore,
-                telegram=self.telegram,
-                on_open_callback=self._on_white_opened,
-                on_close_callback=self._on_white_closed,
-            )
-            self.white_threads[symbol] = wt
-            wt.start()
-
-            self.orange_threads[symbol] = []
-            self.teal_threads[symbol] = {}
-            for label in ("turuncu1", "turuncu2", "turuncu3", "turuncu4"):
-                ot = OrangeThread(
-                    symbol=symbol,
-                    label=label,
-                    config=self.config,
-                    client=self.client,
-                    feed=self.feed,
-                    balance=self.balance,
-                    semaphore=self.orange_semaphore,
-                    telegram=self.telegram,
-                    on_open_callback=self._on_orange_opened,
-                    on_close_callback=self._on_orange_closed,
-                )
-                self.orange_threads[symbol].append(ot)
-                ot.start()
-
-        logger.info(f"{len(self.config['coins'])} coin için thread'ler başlatıldı.")
-
-        signal.signal(signal.SIGTERM, self._handle_signal)
-        signal.signal(signal.SIGINT, self._handle_signal)
-
-        # Ana thread bekle
-        signal.pause() if hasattr(signal, "pause") else self._wait()
-
-    def stop(self):
-        if not self._running:
+        # 4. Bakiye oku
+        balance_info = self.bybit.get_balance()
+        if not balance_info:
+            log.critical("Bakiye alinamadi!")
             return
-        self._running = False
-        logger.info("Bot durduruluyor...")
+        log.info("Bakiye: %.2f USDT", balance_info["total"])
 
-        for rt in self.red_threads.values():
-            rt.stop()
-        for bt in self.blue_threads.values():
-            bt.stop()
-        for yt in self.yellow1_threads.values():
-            yt.force_stop()
-        for yt in self.yellow2_threads.values():
-            yt.force_stop()
-        for wt in self.white_threads.values():
-            wt.stop()
-        for pt in self.purple_threads.values():
-            pt.stop()
-        for ot_list in self.orange_threads.values():
-            for ot in ot_list:
-                ot.stop()
-        for tt_dict in self.teal_threads.values():
-            for tt in tt_dict.values():
-                tt.stop()
+        # 5. Başlangıç mumlarını çek ve indikatörleri hesapla
+        self._load_initial_data(coins)
 
-        self.feed.stop()
-        self.telegram.stop_scheduler()
-        self.telegram.bot_stopped()
-        logger.info("Bot durduruldu.")
+        # 6. Mevcut pozisyonları kontrol et
+        self._check_existing_positions()
 
-    # ------------------------------------------------------------------ #
-    #  Callback'ler (red thread → blue/yellow başlat)                    #
-    # ------------------------------------------------------------------ #
-
-    def _on_red_opened(self, symbol: str, red_table: RedTable, blue_table: BlueTable):
-        # Mavi thread
-        bt = BlueThread(
-            symbol=symbol,
-            label="mavi",
-            blue_table=blue_table,
-            config=self.config,
-            client=self.client,
-            feed=self.feed,
-            balance=self.balance,
-            telegram=self.telegram,
+        # 7. WebSocket başlat
+        self.ws = WebSocketClient(
+            on_tick=self._on_tick,
+            on_candle_close=self._on_candle_close
         )
-        self.blue_threads[symbol] = bt
-        bt.start()
+        self.ws.start(coins)
 
-        # Sarı 1
-        y1 = YellowThread(
-            symbol=symbol,
-            label="yellow1",
-            red_table=red_table,
-            config=self.config,
-            client=self.client,
-            feed=self.feed,
-            balance=self.balance,
-            telegram=self.telegram,
+        # 8. Bot durumunu ayarla
+        self.running = True
+        self.start_time = time.time()
+        self.telegram.daily_stats["start_balance"] = balance_info["total"]
+
+        # 9. Telegram bot başlat
+        self.telegram.setup_commands(self)
+        self.telegram.start_polling()
+
+        # 10. Bot başladı bildirimi
+        eco_states = {n: e.active for n, e in self.ecosystems.items()}
+        open_count = sum(e.get_total_count() for e in self.ecosystems.values())
+        untagged = self._get_untagged_positions()
+        margin_pct = self.config["global"]["marjin_orani"]
+        self.telegram.send_bot_started(
+            balance_info["total"], margin_pct, leverage,
+            eco_states, open_count, untagged
         )
-        self.yellow1_threads[symbol] = y1
-        y1.start()
 
-        # Sarı 2
-        y2 = YellowThread(
-            symbol=symbol,
-            label="yellow2",
-            red_table=red_table,
-            config=self.config,
-            client=self.client,
-            feed=self.feed,
-            balance=self.balance,
-            telegram=self.telegram,
+        self._add_event(f"Bot baslatildi | Bakiye: {format_usdt(balance_info['total'])} USDT")
+
+        # 11. Arka plan thread'leri başlat
+        self._start_background_threads()
+
+        # 12. Ana döngü
+        log.info("Bot calisiyor, Ctrl+C ile durdurulabilir")
+        try:
+            while not self._stop_event.is_set():
+                self._stop_event.wait(1)
+        except KeyboardInterrupt:
+            log.info("Klavye ile durdurma istegi alindi")
+        finally:
+            self._shutdown()
+
+    def _load_initial_data(self, coins):
+        log.info("Baslangic verileri yukleniyor (%d coin, %d mum)...",
+                 len(coins), self.config["global"]["baslangic_mum_sayisi"])
+
+        limit = self.config["global"]["baslangic_mum_sayisi"]
+        interval = self.config["global"]["timeframe"]
+
+        for symbol in coins:
+            candles = self.bybit.get_klines(symbol, interval, limit)
+            if candles:
+                self.data_pool.set_initial_candles(symbol, candles)
+                indicators = compute_all_indicators(candles, self.config)
+                self.data_pool.set_indicators(symbol, indicators)
+                log.debug("%s: %d mum, indikatorler hesaplandi", symbol, len(candles))
+            else:
+                log.warning("%s: Mum verisi alinamadi!", symbol)
+            time.sleep(0.2)  # Rate limit (5 req/sec, Bybit'in 10/sec limitinin altında)
+
+        log.info("Baslangic verileri yuklendi")
+
+    def _check_existing_positions(self):
+        positions = self.bybit.get_positions()
+        if not positions:
+            log.info("Acik pozisyon bulunmuyor")
+            return
+
+        our_count = 0
+        untagged_count = 0
+        for pos in positions:
+            link_id = pos.get("order_link_id", "")
+            if is_our_order(link_id):
+                our_count += 1
+                log.info("Bizim pozisyon: %s %s %s (%.6f)",
+                         pos["symbol"], pos["side"], link_id, pos["size"])
+            else:
+                untagged_count += 1
+                log.warning("Etiketsiz pozisyon: %s %s (%.6f) - dokunulmayacak",
+                            pos["symbol"], pos["side"], pos["size"])
+
+        log.info("Pozisyon ozeti: %d bizim, %d etiketsiz", our_count, untagged_count)
+
+    def _get_untagged_positions(self):
+        positions = self.bybit.get_positions()
+        untagged = []
+        for pos in positions:
+            link_id = pos.get("order_link_id", "")
+            if not is_our_order(link_id) and pos["size"] > 0:
+                untagged.append(pos)
+        return untagged
+
+    # === VERİ GERİ ÇAĞIRMALARI ===
+
+    def _on_tick(self, symbol, price):
+        if not self.running:
+            return
+
+        self.data_pool.update_price(symbol, price)
+
+        # Anlık fiyata göre çalışan ekosistemler: Kırmızı, Gold
+        for name in ["kirmizi", "gold"]:
+            eco = self.ecosystems[name]
+            if eco.active:
+                try:
+                    eco.on_tick(symbol, price)
+                except Exception as e:
+                    log.error("%s on_tick hatasi (%s): %s", name, symbol, e)
+
+        # Tüm ekosistemlerin hedge ve çıkış kontrolleri tick'te yapılır
+        for name in ["beyaz", "sari", "siyah"]:
+            eco = self.ecosystems[name]
+            if eco.active:
+                try:
+                    eco.on_tick(symbol, price)
+                except Exception as e:
+                    log.error("%s on_tick hatasi (%s): %s", name, symbol, e)
+
+    def _on_candle_close(self, symbol, candle):
+        if not self.running:
+            return
+
+        # Mumu veri havuzuna ekle
+        self.data_pool.add_candle(symbol, candle)
+
+        # İndikatörleri yeniden hesapla
+        candles = self.data_pool.get_candles(symbol)
+        indicators = compute_all_indicators(candles, self.config)
+        self.data_pool.set_indicators(symbol, indicators)
+
+        log.debug("%s mum kapandi: C=%.4f", symbol, candle["close"])
+
+        # Mum kapanışına göre çalışan ekosistemler: Beyaz, Sarı, Siyah
+        for name in ["beyaz", "sari", "siyah"]:
+            eco = self.ecosystems[name]
+            if eco.active:
+                try:
+                    eco.on_candle_close(symbol, candle)
+                except Exception as e:
+                    log.error("%s on_candle_close hatasi (%s): %s", name, symbol, e)
+
+    # === ARKA PLAN THREAD'LERİ ===
+
+    def _start_background_threads(self):
+        # Periyodik raporlar
+        self._report_thread = threading.Thread(
+            target=self._report_loop, daemon=True, name="report_loop"
         )
-        self.yellow2_threads[symbol] = y2
-        y2.start()
+        self._report_thread.start()
 
-    def _on_white_opened(self, symbol: str, white_table, purple_table):
-        pt = PurpleThread(
-            symbol=symbol,
-            purple_table=purple_table,
-            config=self.config,
-            client=self.client,
-            feed=self.feed,
-            balance=self.balance,
-            telegram=self.telegram,
+        # Sağlık kontrolü
+        self._health_thread = threading.Thread(
+            target=self._health_loop, daemon=True, name="health_loop"
         )
-        self.purple_threads[symbol] = pt
-        pt.start()
+        self._health_thread.start()
 
-    def _on_white_closed(self, symbol: str, white_table):
-        if symbol in self.purple_threads:
-            self.purple_threads[symbol].stop()
-            del self.purple_threads[symbol]
-
-    def _on_orange_opened(self, symbol: str, label: str, orange_table, teal_table):
-        teal_label = label.replace("turuncu", "turkuaz")
-        tt = TealThread(
-            symbol=symbol,
-            label=teal_label,
-            teal_table=teal_table,
-            config=self.config,
-            client=self.client,
-            feed=self.feed,
-            balance=self.balance,
-            telegram=self.telegram,
+        # Config değişiklik kontrolü
+        self._config_thread = threading.Thread(
+            target=self._config_watch_loop, daemon=True, name="config_watch"
         )
-        self.teal_threads[symbol][label] = tt
-        tt.start()
+        self._config_thread.start()
 
-    def _on_orange_closed(self, symbol: str, label: str):
-        if label in self.teal_threads.get(symbol, {}):
-            self.teal_threads[symbol][label].stop()
-            del self.teal_threads[symbol][label]
+    def _report_loop(self):
+        last_1h = time.time()
+        last_6h = time.time()
+        last_12h = time.time()
+        last_24h = time.time()
 
-    def _on_red_closed(self, symbol: str, red_table: RedTable):
-        if symbol in self.blue_threads:
-            self.blue_threads[symbol].stop()
-            del self.blue_threads[symbol]
-        # Sarı thread'ler kendi çıkışlarına göre devam eder (stop çağrılmaz)
+        while not self._stop_event.is_set():
+            self._stop_event.wait(60)
+            if self._stop_event.is_set():
+                break
 
-    # ------------------------------------------------------------------ #
-    #  Sinyal / bekleme                                                   #
-    # ------------------------------------------------------------------ #
+            now = time.time()
+            balance_info = self.bybit.get_balance()
+            balance = balance_info["total"] if balance_info else 0
+            open_counts = self._get_open_counts()
 
-    def _handle_signal(self, signum, frame):
-        self.stop()
-        sys.exit(0)
+            cfg_tg = self.config.get("telegram", {})
 
-    def _wait(self):
-        import time
-        while self._running:
-            time.sleep(1)
+            if now - last_1h >= 3600 and cfg_tg.get("periyodik_rapor_1s", True):
+                self.telegram.send_hourly_report(balance, open_counts)
+                last_1h = now
+
+            if now - last_6h >= 21600 and cfg_tg.get("periyodik_rapor_6s", True):
+                self.telegram.send_6h_report(balance, open_counts)
+                last_6h = now
+
+            if now - last_12h >= 43200 and cfg_tg.get("periyodik_rapor_12s", True):
+                self.telegram.send_12h_report(balance, open_counts)
+                last_12h = now
+
+            if now - last_24h >= 86400 and cfg_tg.get("periyodik_rapor_24s", True):
+                self.telegram.send_24h_report(balance, open_counts)
+                last_24h = now
+
+    def _health_loop(self):
+        was_connected = True
+        while not self._stop_event.is_set():
+            self._stop_event.wait(10)
+            if self._stop_event.is_set():
+                break
+
+            if self.ws:
+                is_connected = self.ws.is_connected
+
+                if was_connected and not is_connected:
+                    log.warning("WebSocket baglantisi kesildi")
+                    self.telegram.send_connection_lost()
+                    self._add_event("WebSocket baglantisi kesildi")
+
+                if not was_connected and is_connected:
+                    downtime = 0
+                    if self.ws.disconnect_time:
+                        downtime = time.time() - self.ws.disconnect_time
+                    self.telegram.send_connection_restored(downtime)
+                    self._add_event(f"WebSocket baglantisi kuruldu (kesinti: {format_duration(downtime)})")
+
+                was_connected = is_connected
+
+                if not is_connected:
+                    self.ws.check_health()
+
+    def _config_watch_loop(self):
+        while not self._stop_event.is_set():
+            self._stop_event.wait(5)
+            if self._stop_event.is_set():
+                break
+
+            try:
+                current_mtime = get_config_mtime()
+                if current_mtime != self.config_mtime:
+                    log.info("Config degisikligi algilandi, yeniden yukleniyor...")
+                    new_config = load_config()
+                    self.config_mtime = current_mtime
+                    self._apply_config(new_config)
+                    self._add_event("Config guncellendi")
+            except Exception as e:
+                log.error("Config izleme hatasi: %s", e)
+
+    def _apply_config(self, new_config):
+        self.config = new_config
+        self.executor.reload_config(new_config)
+
+        eco_map = {
+            "kirmizi": "kirmizi", "beyaz": "beyaz",
+            "sari": "sari", "siyah": "siyah", "gold": "gold"
+        }
+        for config_key, eco_name in eco_map.items():
+            if eco_name in self.ecosystems:
+                eco_cfg = new_config.get(config_key, {})
+                self.ecosystems[eco_name].reload_config(eco_cfg)
+
+        log.info("Config uygulandı (acik islemler eski parametrelerle devam eder)")
+
+    # === BOT YÖNETİMİ (Telegram komutları tarafından çağrılır) ===
+
+    def stop_bot(self):
+        log.info("Bot durduruluyor...")
+        self.running = False
+
+        eco_counts = {n: e.get_total_count() for n, e in self.ecosystems.items()}
+        self.telegram.send_bot_stopped(eco_counts)
+        self._add_event("Bot durduruldu")
+        self._stop_event.set()
+
+    def start_bot(self):
+        log.info("Bot yeniden baslatiliyor...")
+        self.running = True
+        self.start_time = time.time()
+        self._stop_event.clear()
+
+        balance_info = self.bybit.get_balance()
+        if balance_info:
+            eco_states = {n: e.active for n, e in self.ecosystems.items()}
+            open_count = sum(e.get_total_count() for e in self.ecosystems.values())
+            untagged = self._get_untagged_positions()
+            self.telegram.send_bot_started(
+                balance_info["total"],
+                self.config["global"]["marjin_orani"],
+                self.config["global"]["kaldirac"],
+                eco_states, open_count, untagged
+            )
+        self._add_event("Bot baslatildi")
+
+    def stop_ecosystem(self, name):
+        if name in self.ecosystems:
+            self.ecosystems[name].active = False
+            log.info("%s ekosistemi durduruldu", name)
+            self._add_event(f"{name} ekosistemi durduruldu")
+
+    def start_ecosystem(self, name):
+        if name in self.ecosystems:
+            self.ecosystems[name].active = True
+            log.info("%s ekosistemi baslatildi", name)
+            self._add_event(f"{name} ekosistemi baslatildi")
+
+    def close_all(self):
+        results = self.executor.close_all_positions()
+        # Tüm ekosistem trade listelerini temizle
+        for eco in self.ecosystems.values():
+            eco.trades.clear()
+            eco.hedge_trades.clear()
+            if hasattr(eco, "sub_trades_1"):
+                eco.sub_trades_1.clear()
+            if hasattr(eco, "sub_trades_2"):
+                eco.sub_trades_2.clear()
+            if hasattr(eco, "hedge_trades_1"):
+                eco.hedge_trades_1.clear()
+            if hasattr(eco, "hedge_trades_2"):
+                eco.hedge_trades_2.clear()
+        self._add_event(f"Tum pozisyonlar kapatildi ({len(results)} adet)")
+        return results
+
+    def get_balance(self):
+        return self.bybit.get_balance()
+
+    def get_status_info(self):
+        balance_info = self.bybit.get_balance()
+        return {
+            "running": self.running,
+            "balance": balance_info["total"] if balance_info else 0,
+            "uptime": time.time() - self.start_time if self.start_time > 0 else 0,
+            "open_counts": self._get_open_counts(),
+            "ecosystem_states": {n: e.active for n, e in self.ecosystems.items()},
+            "ws_connected": self.ws.is_connected if self.ws else False,
+            "last_data_ago": self.ws.seconds_since_last_data if self.ws else -1
+        }
+
+    def get_all_positions(self):
+        positions = []
+        for name, eco in self.ecosystems.items():
+            for trade in eco.get_all_trades():
+                current_price = self.data_pool.get_price(trade.symbol)
+                if trade.side == "short":
+                    pnl = (trade.entry_price - current_price) * trade.qty
+                else:
+                    pnl = (current_price - trade.entry_price) * trade.qty
+                pnl_pct = (pnl / (trade.entry_price * trade.qty)) * 100 if trade.entry_price * trade.qty > 0 else 0
+                duration = time.time() - trade.open_time if trade.open_time > 0 else 0
+
+                positions.append({
+                    "symbol": trade.symbol,
+                    "side": trade.side,
+                    "ecosystem": trade.ecosystem,
+                    "entry_price": trade.entry_price,
+                    "current_price": current_price,
+                    "qty": trade.qty,
+                    "pnl": pnl,
+                    "pnl_pct": pnl_pct,
+                    "duration": duration
+                })
+        return positions
+
+    def get_all_flags(self):
+        all_flags = []
+        for eco in self.ecosystems.values():
+            all_flags.extend(eco.get_open_flags())
+        return all_flags
+
+    def get_recent_events(self, count=10):
+        return self.recent_events[-count:]
+
+    def _get_open_counts(self):
+        return {n: e.get_total_count() for n, e in self.ecosystems.items()}
+
+    def _add_event(self, text):
+        ts = datetime.now().strftime("%H:%M:%S")
+        entry = f"[{ts}] {text}"
+        self.recent_events.append(entry)
+        if len(self.recent_events) > 100:
+            self.recent_events = self.recent_events[-100:]
+
+    def _shutdown(self):
+        log.info("Bot kapatiliyor...")
+        self.running = False
+        self._stop_event.set()
+
+        if self.ws:
+            self.ws.stop()
+
+        log.info("Bot kapatildi")
+        log.info("=" * 60)
+
+
+def main():
+    bot = BotManager()
+
+    # Sinyal yakalama - bot önceden tanımlanmalı ki closure çalışsın
+    def signal_handler(sig, frame):
+        log.info("Sinyal alindi: %s", sig)
+        bot._stop_event.set()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    bot.run()
 
 
 if __name__ == "__main__":
-    bot = TradeBot()
-    bot.start()
+    main()

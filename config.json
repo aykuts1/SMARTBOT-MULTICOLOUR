@@ -1,58 +1,103 @@
 {
-  "trading": {
-    "balance_pct": 0.02,        // Her işlemde kullanılacak bakiye yüzdesi (%2)
-    "leverage": 50,              // Kaldıraç
-    "margin_type": "CROSSED",    // Cross Margin
-    "sl_pct": 0.02,              // Borsaya girilen sabit SL yüzdesi (%2)
-    "max_open_coins": 10         // Aynı anda en fazla açık olabilecek kırmızı işlem sayısı
-  },
+    "_aciklama": "Trade Bot Parametre Dosyası - Tüm sayısal değerler burada tutulur",
 
-  "band": {
-    "timeframe": "30",           // Mum timeframe'i (dakika)
-    "ema_period": 48,            // Merkez EMA periyodu
-    "atr_period": 48,            // ATR periyodu
-    "band_levels": 7             // Her yönde kaç bant çizgisi (üst + alt)
-  },
-
-  "chandelier_exit": {
-    "atr_multiplier": 2,         // CE için ATR çarpanı
-    "atr_period": 48             // CE için ATR periyodu
-  },
-
-  "coins": [
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
-    "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "POLUSDT",
-    "TONUSDT", "NEARUSDT", "UNIUSDT", "ATOMUSDT", "ETCUSDT",
-    "APTUSDT", "OPUSDT", "ARBUSDT", "SUIUSDT", "TRXUSDT"
-  ],
-
-  "data_feed": {
-    "interval_seconds": 5        // Bybit'ten veri çekme aralığı (saniye)
-  },
-
-  "white_ecosystem": {
-    "max_open_coins": 10,           // Aynı anda en fazla açık beyaz işlem
-    "stochastic": {
-      "k_length": 50,               // K Length
-      "k_smooth": 21,               // K Smoothing
-      "d_smooth": 8                 // D Smoothing
+    "global": {
+        "_aciklama": "Genel bot ayarları",
+        "kaldirac": 50,
+        "marjin_orani": 0.02,
+        "stop_loss_orani": 0.02,
+        "ekosistem_basina_max_islem": 20,
+        "baslangic_mum_sayisi": 200,
+        "timeframe": "30",
+        "coin_listesi": [
+            "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
+            "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "POLUSDT",
+            "TONUSDT", "NEARUSDT", "UNIUSDT", "ATOMUSDT", "ETCUSDT",
+            "APTUSDT", "OPUSDT", "ARBUSDT", "SUIUSDT", "TRXUSDT"
+        ],
+        "islem_acma_deneme": 3,
+        "islem_acma_bekleme_sn": 2,
+        "islem_kapatma_bekleme_sn": 2,
+        "kapatma_hatasi_bildirim_aralik_sn": 300,
+        "ws_yeniden_baglanma_max_sn": 60
     },
-    "macd": {
-      "fast": 21,                   // Fast EMA periyodu
-      "slow": 50,                   // Slow EMA periyodu
-      "signal": 9                   // Signal periyodu
-    }
-  },
 
-  "orange_ecosystem": {
-    "max_open_trades": 20         // Sistem genelinde aynı anda max açık Turuncu işlem sayısı
-  },
+    "telegram": {
+        "_aciklama": "Telegram ayarları - token ve chat_id Railway env'den okunur",
+        "aktif": true,
+        "periyodik_rapor_1s": true,
+        "periyodik_rapor_6s": true,
+        "periyodik_rapor_12s": true,
+        "periyodik_rapor_24s": true
+    },
 
-  "telegram": {
-    "report_intervals": {
-      "hourly_minutes": 60,      // 1 saatlik rapor aralığı (dakika)
-      "half_daily_minutes": 720, // 12 saatlik rapor aralığı (dakika)
-      "daily_minutes": 1440      // 24 saatlik rapor aralığı (dakika)
+    "kirmizi": {
+        "_aciklama": "Kırmızı Ekosistem - Anlık fiyat, EMA48 bant yapısı",
+        "aktif": true,
+        "timeframe": "30",
+        "ema_periyodu": 48,
+        "atr_periyodu": 48,
+        "bant_carpani": 1.0,
+        "flag_giris_atr": 1,
+        "islem_giris_atr": 2,
+        "mavi_hedge_giris_atr": 0.5,
+        "chandelier_atr_carpani": 2,
+        "kirmizi_1_giris_atr": 4,
+        "kirmizi_1_lose_exit_atr": 2,
+        "kirmizi_1_winrate_atr": 5,
+        "kirmizi_2_giris_atr": 6,
+        "kirmizi_2_lose_exit_atr": 2,
+        "kirmizi_2_winrate_atr": 5
+    },
+
+    "beyaz": {
+        "_aciklama": "Beyaz Ekosistem - Mum kapanışı, Stokastik + MACD",
+        "aktif": true,
+        "timeframe": "30",
+        "ema_periyodu": 48,
+        "atr_periyodu": 48,
+        "stokastik_k_length": 50,
+        "stokastik_k_smoothing": 21,
+        "stokastik_d": 8,
+        "macd_hizli": 21,
+        "macd_yavas": 50,
+        "macd_signal": 9,
+        "bekleme_mum_sayisi": 5,
+        "lose_exit_atr": 1.0,
+        "winrate_atr": 2.5,
+        "mor_hedge_giris_atr": 0.25,
+        "chandelier_atr_carpani": 1
+    },
+
+    "sari": {
+        "_aciklama": "Sarı Ekosistem - Mum kapanışı, Bollinger Bandı",
+        "aktif": true,
+        "timeframe": "30",
+        "bollinger_periyot": 20,
+        "bollinger_sapma": 2,
+        "ardarda_temas_sayisi": 3,
+        "winrate_mesafe_carpani": 2.5,
+        "chandelier_mesafe_carpani": 1
+    },
+
+    "siyah": {
+        "_aciklama": "Siyah Ekosistem - Mum kapanışı, Donchian + EMA48",
+        "aktif": true,
+        "timeframe": "30",
+        "donchian_periyodu": 50,
+        "ema_periyodu": 48,
+        "max_lose_exit_yuzdesi": 0.02,
+        "winrate_mesafe_carpani": 2.5,
+        "chandelier_mesafe_carpani": 1
+    },
+
+    "gold": {
+        "_aciklama": "Gold Ekosistem - Anlık fiyat, EMA21 bant yapısı, dinamik seviyeler",
+        "aktif": true,
+        "timeframe": "30",
+        "ema_periyodu": 21,
+        "atr_periyodu": 21,
+        "bant_carpanlari": [0.25, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0],
+        "chandelier_atr_carpani": 1
     }
-  }
 }
