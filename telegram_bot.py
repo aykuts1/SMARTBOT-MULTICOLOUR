@@ -823,6 +823,14 @@ Stop loss'lar aktif."""
         if not self.token:
             log.warning("Telegram token bulunamadi, komutlar devre disi")
             return
+        thread = threading.Thread(target=self._run_polling, daemon=True)
+        thread.start()
+        log.info("Telegram komutlari baslatildi")
+
+    def _run_polling(self):
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
 
         self.app = Application.builder().token(self.token).build()
 
@@ -845,12 +853,4 @@ Stop loss'lar aktif."""
         self.app.add_handler(CommandHandler("flagler", self.cmd_flagler))
         self.app.add_handler(CommandHandler("iptal", self.cmd_iptal))
 
-        thread = threading.Thread(target=self._run_polling, daemon=True)
-        thread.start()
-        log.info("Telegram komutlari baslatildi")
-
-    def _run_polling(self):
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
         self.app.run_polling(drop_pending_updates=True)
