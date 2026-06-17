@@ -2,6 +2,7 @@ import math
 import time
 import json
 import os
+from decimal import Decimal, ROUND_DOWN
 from datetime import datetime, timedelta
 from logger_setup import get_logger
 
@@ -61,7 +62,10 @@ def tick_round(value, tick_size, direction="nearest"):
 def qty_round_down(qty, step_size):
     if step_size <= 0:
         return qty
-    return math.floor(qty / step_size) * step_size
+    d_qty = Decimal(str(qty))
+    d_step = Decimal(str(step_size))
+    steps = (d_qty / d_step).to_integral_value(rounding=ROUND_DOWN)
+    return float(steps * d_step)
 
 
 def sl_round(entry_price, sl_price, tick_size, side):

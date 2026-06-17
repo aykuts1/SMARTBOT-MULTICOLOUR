@@ -56,11 +56,13 @@ class RedEcosystem(EcosystemBase):
                 self.set_flag(symbol, "short", True)
         elif price > short_alt1:
             self.clear_flag(symbol, "short")
+            self.clear_flag(symbol, "short_block")
 
-        if price < short_alt2 and self.has_flag(symbol, "short"):
+        if price < short_alt2 and self.has_flag(symbol, "short") and not self.has_flag(symbol, "short_block"):
             if self.can_open_trade():
                 self._open_main_trade(symbol, price, ema, atr, "short")
                 self.clear_flag(symbol, "short")
+                self.set_flag(symbol, "short_block", True)
 
         # --- LONG (simetri) ---
         if price > long_ust1:
@@ -68,11 +70,13 @@ class RedEcosystem(EcosystemBase):
                 self.set_flag(symbol, "long", True)
         elif price < long_ust1:
             self.clear_flag(symbol, "long")
+            self.clear_flag(symbol, "long_block")
 
-        if price > long_ust2 and self.has_flag(symbol, "long"):
+        if price > long_ust2 and self.has_flag(symbol, "long") and not self.has_flag(symbol, "long_block"):
             if self.can_open_trade():
                 self._open_main_trade(symbol, price, ema, atr, "long")
                 self.clear_flag(symbol, "long")
+                self.set_flag(symbol, "long_block", True)
 
         # --- Alt işlemler (Kırmızı 1, Kırmızı 2) kontrolü ---
         self._check_sub_entries(symbol, price, ema, atr)
