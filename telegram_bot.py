@@ -825,32 +825,43 @@ Stop loss'lar aktif."""
             return
         thread = threading.Thread(target=self._run_polling, daemon=True)
         thread.start()
-        log.info("Telegram komutlari baslatildi")
+        log.info("Telegram polling thread baslatildi")
 
     def _run_polling(self):
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # Webhook varsa sil (webhook aktifken polling çalışmaz)
+        try:
+            resp = req_lib.get(
+                f"https://api.telegram.org/bot{self.token}/deleteWebhook",
+                params={"drop_pending_updates": True},
+                timeout=10
+            )
+            log.info("Webhook silindi: %s", resp.json().get("description", ""))
+        except Exception as e:
+            log.warning("Webhook silme hatasi: %s", e)
 
-        self.app = Application.builder().token(self.token).build()
+        try:
+            app = Application.builder().token(self.token).build()
 
-        self.app.add_handler(CommandHandler("durdur", self.cmd_durdur))
-        self.app.add_handler(CommandHandler("durdur_onayla", self.cmd_durdur_onayla))
-        self.app.add_handler(CommandHandler("baslat", self.cmd_baslat))
-        self.app.add_handler(CommandHandler("anlik", self.cmd_anlik))
-        self.app.add_handler(CommandHandler("durum", self.cmd_durum))
-        self.app.add_handler(CommandHandler("pozisyonlar", self.cmd_pozisyonlar))
-        self.app.add_handler(CommandHandler("kapat_hepsi", self.cmd_kapat_hepsi))
-        self.app.add_handler(CommandHandler("kapat_hepsi_onayla", self.cmd_kapat_hepsi_onayla))
-        self.app.add_handler(CommandHandler("ekosistem_durdur", self.cmd_ekosistem_durdur))
-        self.app.add_handler(CommandHandler("ekosistem_durdur_onayla", self.cmd_ekosistem_durdur_onayla))
-        self.app.add_handler(CommandHandler("ekosistem_baslat", self.cmd_ekosistem_baslat))
-        self.app.add_handler(CommandHandler("bakiye", self.cmd_bakiye))
-        self.app.add_handler(CommandHandler("pnl", self.cmd_pnl))
-        self.app.add_handler(CommandHandler("log", self.cmd_log))
-        self.app.add_handler(CommandHandler("panic", self.cmd_panic))
-        self.app.add_handler(CommandHandler("panic_onayla", self.cmd_panic_onayla))
-        self.app.add_handler(CommandHandler("flagler", self.cmd_flagler))
-        self.app.add_handler(CommandHandler("iptal", self.cmd_iptal))
+            app.add_handler(CommandHandler("durdur", self.cmd_durdur))
+            app.add_handler(CommandHandler("durdur_onayla", self.cmd_durdur_onayla))
+            app.add_handler(CommandHandler("baslat", self.cmd_baslat))
+            app.add_handler(CommandHandler("anlik", self.cmd_anlik))
+            app.add_handler(CommandHandler("durum", self.cmd_durum))
+            app.add_handler(CommandHandler("pozisyonlar", self.cmd_pozisyonlar))
+            app.add_handler(CommandHandler("kapat_hepsi", self.cmd_kapat_hepsi))
+            app.add_handler(CommandHandler("kapat_hepsi_onayla", self.cmd_kapat_hepsi_onayla))
+            app.add_handler(CommandHandler("ekosistem_durdur", self.cmd_ekosistem_durdur))
+            app.add_handler(CommandHandler("ekosistem_durdur_onayla", self.cmd_ekosistem_durdur_onayla))
+            app.add_handler(CommandHandler("ekosistem_baslat", self.cmd_ekosistem_baslat))
+            app.add_handler(CommandHandler("bakiye", self.cmd_bakiye))
+            app.add_handler(CommandHandler("pnl", self.cmd_pnl))
+            app.add_handler(CommandHandler("log", self.cmd_log))
+            app.add_handler(CommandHandler("panic", self.cmd_panic))
+            app.add_handler(CommandHandler("panic_onayla", self.cmd_panic_onayla))
+            app.add_handler(CommandHandler("flagler", self.cmd_flagler))
+            app.add_handler(CommandHandler("iptal", self.cmd_iptal))
 
-        self.app.run_polling(drop_pending_updates=True)
+            log.info("Telegram komut handler'lari eklendi, polling basliyor...")
+            app.run_polling(drop_pending_updates=True, allowed_updates=["message"])
+        except Exception as e:
+            log.error("Telegram polling hatasi: %s", e, exc_info=True)
