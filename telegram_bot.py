@@ -3,8 +3,6 @@ import time
 import threading
 import requests as req_lib
 from datetime import datetime
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
 from logger_setup import get_logger
 from utils import (
     format_usdt, format_pnl, format_duration, now_str,
@@ -537,8 +535,15 @@ Stop loss'lar aktif."""
     def setup_commands(self, bot_manager):
         self.bot_manager = bot_manager
 
-    async def cmd_durdur(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text(
+    def _reply(self, chat_id, text):
+        try:
+            url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+            req_lib.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
+        except Exception as e:
+            log.error("Telegram yanit hatasi: %s", e)
+
+    def cmd_durdur(self, chat_id, args):
+        self._reply(chat_id,
             "⚠️ ONAY GEREKİYOR\n\n"
             "Botu durdurmak istediğine emin misin?\n"
             "Açık pozisyonlar Bybit'te kalmaya devam edecek.\n"
@@ -547,17 +552,17 @@ Stop loss'lar aktif."""
             "❌ /iptal — Hayır, vazgeç"
         )
 
-    async def cmd_durdur_onayla(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def cmd_durdur_onayla(self, chat_id, args):
         if self.bot_manager:
             self.bot_manager.stop_bot()
-        await update.message.reply_text("🔴 Bot durduruldu.")
+        self._reply(chat_id, "🔴 Bot durduruldu.")
 
-    async def cmd_baslat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def cmd_baslat(self, chat_id, args):
         if self.bot_manager:
             self.bot_manager.start_bot()
-        await update.message.reply_text("🟢 Bot başlatılıyor...")
+        self._reply(chat_id, "🟢 Bot başlatılıyor...")
 
-    async def cmd_anlik(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def cmd_anlik(self, chat_id, args):
         if not self.bot_manager:
             return
         info = self.bot_manager.get_status_info()
@@ -590,9 +595,9 @@ Stop loss'lar aktif."""
 
 📊 Ekosistem Özeti:
 {chr(10).join(eco_lines)}"""
-        await update.message.reply_text(msg)
+        self._reply(chat_id, msg)
 
-    async def cmd_durum(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def cmd_durum(self, chat_id, args):
         if not self.bot_manager:
             return
         info = self.bot_manager.get_status_info()
@@ -637,43 +642,39 @@ Stop loss'lar aktif."""
 🌐 Bybit Bağlantısı:  {'✅ Aktif' if ws_ok else '❌ Kopuk'}
 📡 Websocket:         {'✅ Aktif' if ws_ok else '❌ Kopuk'}
 🕐 Son Veri:          {f'{last_data:.0f} sn önce' if last_data >= 0 else 'Yok'}"""
-        await update.message.reply_text(msg)
+        self._reply(chat_id, msg)
 
-    async def cmd_pozisyonlar(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def cmd_pozisyonlar(self, chat_id, args):
         if not self.bot_manager:
             return
         positions = self.bot_manager.get_all_positions()
         if not positions:
-            await update.message.reply_text("📌 Açık pozisyon bulunmuyor.")
+            self._reply(chat_id, "📌 Açık pozisyon bulunmuyor.")
             return
 
         msg = f"📌 AÇIK POZİSYONLAR\n🕐 {now_str()}\n\nToplam: {len(positions)} pozisyon\n"
-
         current_eco = ""
         for i, pos in enumerate(positions, 1):
             eco = pos.get("ecosystem", "")
             if eco != current_eco:
                 current_eco = eco
                 msg += f"\n─────────────────────\n{ecosystem_emoji(eco)} {ecosystem_display_name(eco).upper()}\n\n"
-
             pnl = pos.get("pnl", 0)
             pnl_pct = pos.get("pnl_pct", 0)
             duration = format_duration(pos.get("duration", 0))
-            msg += f"""{i}. {pos['symbol']}  {side_display(pos['side'])}
-   💵 Giriş:    {format_usdt(pos['entry_price'])}
-   📊 Şu an:    {format_usdt(pos.get('current_price', 0))}
-   💰 PnL:      {format_pnl(pnl, pnl_pct)}
-   ⏱️ Süre:     {duration}\n\n"""
+            msg += (f"{i}. {pos['symbol']}  {side_display(pos['side'])}\n"
+                    f"   💵 Giriş:    {format_usdt(pos['entry_price'])}\n"
+                    f"   📊 Şu an:    {format_usdt(pos.get('current_price', 0))}\n"
+                    f"   💰 PnL:      {format_pnl(pnl, pnl_pct)}\n"
+                    f"   ⏱️ Süre:     {duration}\n\n")
+        self._reply(chat_id, msg[:4096])
 
-        await update.message.reply_text(msg[:4096])
-
-    async def cmd_kapat_hepsi(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def cmd_kapat_hepsi(self, chat_id, args):
         if not self.bot_manager:
             return
         positions = self.bot_manager.get_all_positions()
         total_pnl = sum(p.get("pnl", 0) for p in positions)
-
-        await update.message.reply_text(
+        self._reply(chat_id,
             f"⚠️ ONAY GEREKİYOR\n\n"
             f"Tüm açık pozisyonları kapatmak istediğine emin misin?\n\n"
             f"📌 Kapatılacak Pozisyon: {len(positions)}\n"
@@ -682,52 +683,52 @@ Stop loss'lar aktif."""
             f"❌ /iptal — Hayır, vazgeç"
         )
 
-    async def cmd_kapat_hepsi_onayla(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if self.bot_manager:
-            results = self.bot_manager.close_all()
-            msg = f"⛔ TÜM POZİSYONLAR KAPATILDI\n🕐 {now_str()}\n\n"
-            for r in results:
-                status = "✅" if r["success"] else "❌"
-                msg += f"{status} {r['symbol']} {side_display(r['side'])}    {format_usdt(r.get('pnl', 0))} USDT\n"
-            await update.message.reply_text(msg)
-
-    async def cmd_ekosistem_durdur(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not context.args:
-            await update.message.reply_text("Kullanım: /ekosistem_durdur [ad]\nÖrnek: /ekosistem_durdur siyah")
+    def cmd_kapat_hepsi_onayla(self, chat_id, args):
+        if not self.bot_manager:
             return
-        name = context.args[0].lower()
-        await update.message.reply_text(
+        results = self.bot_manager.close_all()
+        msg = f"⛔ TÜM POZİSYONLAR KAPATILDI\n🕐 {now_str()}\n\n"
+        for r in results:
+            status = "✅" if r["success"] else "❌"
+            msg += f"{status} {r['symbol']} {side_display(r['side'])}    {format_usdt(r.get('pnl', 0))} USDT\n"
+        self._reply(chat_id, msg)
+
+    def cmd_ekosistem_durdur(self, chat_id, args):
+        if not args:
+            self._reply(chat_id, "Kullanım: /ekosistem_durdur [ad]\nÖrnek: /ekosistem_durdur siyah")
+            return
+        name = args[0].lower()
+        self._reply(chat_id,
             f"⚠️ ONAY GEREKİYOR\n\n"
             f"{ecosystem_display_name(name)} ekosistemini durdurmak istediğine emin misin?\n\n"
             f"✅ /ekosistem_durdur_onayla {name}\n"
             f"❌ /iptal"
         )
 
-    async def cmd_ekosistem_durdur_onayla(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not context.args or not self.bot_manager:
+    def cmd_ekosistem_durdur_onayla(self, chat_id, args):
+        if not args or not self.bot_manager:
             return
-        name = context.args[0].lower()
+        name = args[0].lower()
         self.bot_manager.stop_ecosystem(name)
-        await update.message.reply_text(f"⛔ {ecosystem_display_name(name)} ekosistemi durduruldu.")
+        self._reply(chat_id, f"⛔ {ecosystem_display_name(name)} ekosistemi durduruldu.")
 
-    async def cmd_ekosistem_baslat(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not context.args or not self.bot_manager:
+    def cmd_ekosistem_baslat(self, chat_id, args):
+        if not args or not self.bot_manager:
             return
-        name = context.args[0].lower()
+        name = args[0].lower()
         self.bot_manager.start_ecosystem(name)
-        await update.message.reply_text(f"✅ {ecosystem_display_name(name)} ekosistemi başlatıldı.")
+        self._reply(chat_id, f"✅ {ecosystem_display_name(name)} ekosistemi başlatıldı.")
 
-    async def cmd_bakiye(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def cmd_bakiye(self, chat_id, args):
         if not self.bot_manager:
             return
         info = self.bot_manager.get_balance()
         if not info:
-            await update.message.reply_text("❌ Bakiye alınamadı.")
+            self._reply(chat_id, "❌ Bakiye alınamadı.")
             return
         margin_per = info["total"] * 0.02
         oc = self.bot_manager.get_status_info().get("open_counts", {})
         total = sum(oc.values())
-
         msg = f"""💰 BAKİYE
 🕐 {now_str()}
 
@@ -737,9 +738,9 @@ Stop loss'lar aktif."""
 
 🎯 İşlem başına marjin: {format_usdt(margin_per)} USDT (%2)
 📌 Açık Pozisyon: {total}"""
-        await update.message.reply_text(msg)
+        self._reply(chat_id, msg)
 
-    async def cmd_pnl(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def cmd_pnl(self, chat_id, args):
         if not self.bot_manager:
             return
         balance = self.bot_manager.get_balance()
@@ -766,47 +767,47 @@ Stop loss'lar aktif."""
 
 🏅 Bugün Winrate:  %{wr:.0f}  ({self.daily_stats['wins']}W / {self.daily_stats['losses']}L)
 💸 Bugün Komisyon: {format_usdt(self.daily_stats['commission'])} USDT"""
-        await update.message.reply_text(msg)
+        self._reply(chat_id, msg)
 
-    async def cmd_log(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def cmd_log(self, chat_id, args):
         if not self.bot_manager:
             return
         events = self.bot_manager.get_recent_events(10)
         if not events:
-            await update.message.reply_text("📋 Kayıtlı olay bulunmuyor.")
+            self._reply(chat_id, "📋 Kayıtlı olay bulunmuyor.")
             return
         msg = f"📋 SON 10 OLAY\n🕐 {now_str()}\n\n"
         for i, ev in enumerate(events, 1):
             msg += f"{i}. {ev}\n"
-        await update.message.reply_text(msg[:4096])
+        self._reply(chat_id, msg[:4096])
 
-    async def cmd_panic(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text(
+    def cmd_panic(self, chat_id, args):
+        self._reply(chat_id,
             "🚨 ACİL DURDURMA — ONAY GEREKİYOR\n\n"
             "Tüm pozisyonlar kapatılacak ve bot durdurulacak!\n\n"
             "✅ /panic_onayla — Evet, tümünü kapat ve durdur\n"
             "❌ /iptal — Hayır, vazgeç"
         )
 
-    async def cmd_panic_onayla(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if self.bot_manager:
-            results = self.bot_manager.close_all()
-            self.bot_manager.stop_bot()
-            msg = f"🚨 ACİL DURDURMA GERÇEKLEŞTİRİLDİ\n🕐 {now_str()}\n\n"
-            for r in results:
-                status = "✅" if r["success"] else "❌"
-                msg += f"{status} {r['symbol']} {side_display(r['side'])}    {format_usdt(r.get('pnl', 0))} USDT\n"
-            msg += "\n🔴 BOT DURDURULDU."
-            await update.message.reply_text(msg)
+    def cmd_panic_onayla(self, chat_id, args):
+        if not self.bot_manager:
+            return
+        results = self.bot_manager.close_all()
+        self.bot_manager.stop_bot()
+        msg = f"🚨 ACİL DURDURMA GERÇEKLEŞTİRİLDİ\n🕐 {now_str()}\n\n"
+        for r in results:
+            status = "✅" if r["success"] else "❌"
+            msg += f"{status} {r['symbol']} {side_display(r['side'])}    {format_usdt(r.get('pnl', 0))} USDT\n"
+        msg += "\n🔴 BOT DURDURULDU."
+        self._reply(chat_id, msg)
 
-    async def cmd_flagler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def cmd_flagler(self, chat_id, args):
         if not self.bot_manager:
             return
         flags = self.bot_manager.get_all_flags()
         if not flags:
-            await update.message.reply_text("🚩 Şu an açık flag bulunmuyor.")
+            self._reply(chat_id, "🚩 Şu an açık flag bulunmuyor.")
             return
-
         msg = f"🚩 AÇIK FLAGLER\n🕐 {now_str()}\n\nToplam: {len(flags)} flag\n"
         for f in flags:
             elapsed = time.time() - f.get("time", time.time())
@@ -814,54 +815,80 @@ Stop loss'lar aktif."""
             if "extra" in f:
                 msg += f"\n   🔁 {f['extra']}"
             msg += "\n"
-        await update.message.reply_text(msg[:4096])
+        self._reply(chat_id, msg[:4096])
 
-    async def cmd_iptal(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text("❌ İşlem iptal edildi.")
+    def cmd_iptal(self, chat_id, args):
+        self._reply(chat_id, "❌ İşlem iptal edildi.")
 
     def start_polling(self):
         if not self.token:
             log.warning("Telegram token bulunamadi, komutlar devre disi")
             return
-        thread = threading.Thread(target=self._run_polling, daemon=True)
-        thread.start()
-        log.info("Telegram polling thread baslatildi")
-
-    def _run_polling(self):
-        # Webhook varsa sil (webhook aktifken polling çalışmaz)
         try:
-            resp = req_lib.get(
+            req_lib.get(
                 f"https://api.telegram.org/bot{self.token}/deleteWebhook",
                 params={"drop_pending_updates": True},
                 timeout=10
             )
-            log.info("Webhook silindi: %s", resp.json().get("description", ""))
+            log.info("Webhook silindi")
         except Exception as e:
             log.warning("Webhook silme hatasi: %s", e)
+        thread = threading.Thread(target=self._run_polling, daemon=True)
+        thread.start()
+        log.info("Telegram polling baslatildi")
 
-        try:
-            app = Application.builder().token(self.token).build()
-
-            app.add_handler(CommandHandler("durdur", self.cmd_durdur))
-            app.add_handler(CommandHandler("durdur_onayla", self.cmd_durdur_onayla))
-            app.add_handler(CommandHandler("baslat", self.cmd_baslat))
-            app.add_handler(CommandHandler("anlik", self.cmd_anlik))
-            app.add_handler(CommandHandler("durum", self.cmd_durum))
-            app.add_handler(CommandHandler("pozisyonlar", self.cmd_pozisyonlar))
-            app.add_handler(CommandHandler("kapat_hepsi", self.cmd_kapat_hepsi))
-            app.add_handler(CommandHandler("kapat_hepsi_onayla", self.cmd_kapat_hepsi_onayla))
-            app.add_handler(CommandHandler("ekosistem_durdur", self.cmd_ekosistem_durdur))
-            app.add_handler(CommandHandler("ekosistem_durdur_onayla", self.cmd_ekosistem_durdur_onayla))
-            app.add_handler(CommandHandler("ekosistem_baslat", self.cmd_ekosistem_baslat))
-            app.add_handler(CommandHandler("bakiye", self.cmd_bakiye))
-            app.add_handler(CommandHandler("pnl", self.cmd_pnl))
-            app.add_handler(CommandHandler("log", self.cmd_log))
-            app.add_handler(CommandHandler("panic", self.cmd_panic))
-            app.add_handler(CommandHandler("panic_onayla", self.cmd_panic_onayla))
-            app.add_handler(CommandHandler("flagler", self.cmd_flagler))
-            app.add_handler(CommandHandler("iptal", self.cmd_iptal))
-
-            log.info("Telegram komut handler'lari eklendi, polling basliyor...")
-            app.run_polling(drop_pending_updates=True, allowed_updates=["message"])
-        except Exception as e:
-            log.error("Telegram polling hatasi: %s", e, exc_info=True)
+    def _run_polling(self):
+        commands = {
+            "durdur": self.cmd_durdur,
+            "durdur_onayla": self.cmd_durdur_onayla,
+            "baslat": self.cmd_baslat,
+            "anlik": self.cmd_anlik,
+            "durum": self.cmd_durum,
+            "pozisyonlar": self.cmd_pozisyonlar,
+            "kapat_hepsi": self.cmd_kapat_hepsi,
+            "kapat_hepsi_onayla": self.cmd_kapat_hepsi_onayla,
+            "ekosistem_durdur": self.cmd_ekosistem_durdur,
+            "ekosistem_durdur_onayla": self.cmd_ekosistem_durdur_onayla,
+            "ekosistem_baslat": self.cmd_ekosistem_baslat,
+            "bakiye": self.cmd_bakiye,
+            "pnl": self.cmd_pnl,
+            "log": self.cmd_log,
+            "panic": self.cmd_panic,
+            "panic_onayla": self.cmd_panic_onayla,
+            "flagler": self.cmd_flagler,
+            "iptal": self.cmd_iptal,
+        }
+        offset = None
+        log.info("Telegram getUpdates dongusu basladi")
+        while True:
+            try:
+                params = {"timeout": 30, "allowed_updates": ["message"]}
+                if offset is not None:
+                    params["offset"] = offset
+                resp = req_lib.get(
+                    f"https://api.telegram.org/bot{self.token}/getUpdates",
+                    params=params,
+                    timeout=40
+                )
+                if not resp.ok:
+                    log.warning("getUpdates hatasi: %s", resp.text)
+                    time.sleep(5)
+                    continue
+                for update in resp.json().get("result", []):
+                    offset = update["update_id"] + 1
+                    msg = update.get("message", {})
+                    text = msg.get("text", "")
+                    chat_id = msg.get("chat", {}).get("id")
+                    if not text or not chat_id or not text.startswith("/"):
+                        continue
+                    parts = text.split()
+                    cmd = parts[0].split("@")[0][1:].lower()
+                    args = parts[1:]
+                    handler = commands.get(cmd)
+                    if handler:
+                        threading.Thread(
+                            target=handler, args=(chat_id, args), daemon=True
+                        ).start()
+            except Exception as e:
+                log.error("Telegram polling hatasi: %s", e)
+                time.sleep(5)
