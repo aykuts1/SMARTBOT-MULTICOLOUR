@@ -60,9 +60,9 @@ class GoldEcosystem(EcosystemBase):
         # Giriş: Alt 1'i aşağı keserse + Flag açıksa + henüz girilmemişse
         if price < alt1 and self.has_flag(symbol, "short") and not self.has_flag(symbol, "short_block"):
             if self.can_open_trade():
-                self._open_trade(symbol, price, levels, "short")
-                self.clear_flag(symbol, "short")
                 self.set_flag(symbol, "short_block", True)
+                self.clear_flag(symbol, "short")
+                self._open_trade(symbol, price, levels, "short")
 
         # --- LONG (simetri) ---
         if price > ema:
@@ -74,9 +74,9 @@ class GoldEcosystem(EcosystemBase):
 
         if price > ust1 and self.has_flag(symbol, "long") and not self.has_flag(symbol, "long_block"):
             if self.can_open_trade():
-                self._open_trade(symbol, price, levels, "long")
-                self.clear_flag(symbol, "long")
                 self.set_flag(symbol, "long_block", True)
+                self.clear_flag(symbol, "long")
+                self._open_trade(symbol, price, levels, "long")
 
         # --- Hedge kontrolü ---
         self._check_hedge_entries(symbol, price, levels)
