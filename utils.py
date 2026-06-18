@@ -51,12 +51,16 @@ def now_ts():
 def tick_round(value, tick_size, direction="nearest"):
     if tick_size <= 0:
         return value
+    from decimal import Decimal, ROUND_DOWN, ROUND_UP, ROUND_HALF_UP
+    d_val = Decimal(str(value))
+    d_tick = Decimal(str(tick_size))
     if direction == "down":
-        return math.floor(value / tick_size) * tick_size
+        steps = (d_val / d_tick).to_integral_value(rounding=ROUND_DOWN)
     elif direction == "up":
-        return math.ceil(value / tick_size) * tick_size
+        steps = (d_val / d_tick).to_integral_value(rounding=ROUND_UP)
     else:
-        return round(value / tick_size) * tick_size
+        steps = (d_val / d_tick).to_integral_value(rounding=ROUND_HALF_UP)
+    return float(steps * d_tick)
 
 
 def qty_round_down(qty, step_size):

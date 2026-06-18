@@ -82,24 +82,30 @@ class BybitClient:
             return None
 
     def load_instrument_info(self, symbols):
-        try:
-            result = self.client.get_instruments_info(category="linear")
-            if result["retCode"] == 0:
-                for item in result["result"]["list"]:
-                    if item["symbol"] in symbols:
-                        tick_size = float(item["priceFilter"]["tickSize"])
-                        min_qty = float(item["lotSizeFilter"]["minOrderQty"])
-                        qty_step = float(item["lotSizeFilter"]["qtyStep"])
-                        self.instrument_info[item["symbol"]] = {
-                            "tick_size": tick_size,
-                            "min_qty": min_qty,
-                            "qty_step": qty_step
-                        }
-                log.info("Instrument bilgisi yuklendi: %d coin", len(self.instrument_info))
-            else:
-                log.error("Instrument bilgisi alinamadi: %s", result.get("retMsg", ""))
-        except Exception as e:
-            log.error("Instrument hatasi: %s", e)
+        log.info("Instrument bilgisi yukleniyor: %d coin...", len(symbols))
+        for symbol in symbols:
+            try:
+                result = self.client.get_instruments_info(category="linear", symbol=symbol)
+                if result["retCode"] == 0 and result["result"]["list"]:
+                    item = result["result"]["list"][0]
+                    tick_size = float(item["priceFilter"]["tickSize"])
+                    min_qty = float(item["lotSizeFilter"]["minOrderQty"])
+                    qty_step = float(item["lotSizeFilter"]["qtyStep"])
+                    self.instrument_info[symbol] = {
+                        "tick_size": tick_size,
+                        "min_qty": min_qty,
+                        "qty_step": qty_step
+                    }
+                    log.debug("%s: tick=%.8f min_qty=%.8f step=%.8f",
+                              symbol, tick_size, min_qty, qty_step)
+                else:
+                    log.warning("%s: Instrument bilgisi alinamadi: %s",
+                                symbol, result.get("retMsg", ""))
+                time.sleep(0.1)
+            except Exception as e:
+                log.error("%s instrument hatasi: %s", symbol, e)
+        log.info("Instrument bilgisi yuklendi: %d / %d coin",
+                 len(self.instrument_info), len(symbols))
 
     def get_tick_size(self, symbol):
         info = self.instrument_info.get(symbol)
