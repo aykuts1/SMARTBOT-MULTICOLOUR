@@ -97,9 +97,12 @@ class WebSocketClient:
             if "data" not in message:
                 return
 
+            # Symbol is in topic field: "kline.30.BTCUSDT"
+            topic = message.get("topic", "")
+            symbol = topic.split(".")[-1] if topic else ""
+
             data_list = message["data"]
             for data in data_list:
-                symbol = data.get("symbol", "")
                 confirm = data.get("confirm", False)
 
                 if confirm and symbol:
