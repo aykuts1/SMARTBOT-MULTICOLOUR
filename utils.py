@@ -120,8 +120,7 @@ def parse_order_link_id(order_link_id):
 
 def is_our_order(order_link_id):
     valid_prefixes = [
-        "KIRMIZI", "KIRMIZI1", "KIRMIZI2",
-        "MAVI", "MAVI1", "MAVI2",
+        "KIRMIZI", "MAVI",
         "BEYAZ", "MOR",
         "SARI", "TURUNCU",
         "SIYAH", "GRI",
@@ -135,8 +134,7 @@ def is_our_order(order_link_id):
 
 def ecosystem_emoji(name):
     emojis = {
-        "kirmizi": "🔴", "kirmizi1": "🔴", "kirmizi2": "🔴",
-        "mavi": "🔵", "mavi1": "🔵", "mavi2": "🔵",
+        "kirmizi": "🔴", "mavi": "🔵",
         "beyaz": "⬜", "mor": "🟣",
         "sari": "🟡", "turuncu": "🟠",
         "siyah": "⬛", "gri": "🔘",
@@ -147,8 +145,7 @@ def ecosystem_emoji(name):
 
 def ecosystem_display_name(name):
     names = {
-        "kirmizi": "Kırmızı", "kirmizi1": "Kırmızı 1", "kirmizi2": "Kırmızı 2",
-        "mavi": "Mavi", "mavi1": "Mavi 1", "mavi2": "Mavi 2",
+        "kirmizi": "Kırmızı", "mavi": "Mavi",
         "beyaz": "Beyaz", "mor": "Mor",
         "sari": "Sarı", "turuncu": "Turuncu",
         "siyah": "Siyah", "gri": "Gri",

@@ -11,6 +11,7 @@ class BlackEcosystem(EcosystemBase):
         super().__init__("siyah", config, data_pool, trade_executor, telegram_bot)
         self.prev_dc_lower = {}
         self.prev_dc_upper = {}
+        self._last_scan = {}
 
     def on_candle_close(self, symbol, candle):
         if not self.active:
@@ -53,7 +54,7 @@ class BlackEcosystem(EcosystemBase):
         if (self.has_flag(symbol, "short") and
                 candle_low <= current_dc_lower and
                 current_price < current_ema):
-            if self.can_open_trade():
+            if self.can_open_trade() and not self.has_trade_for_symbol(symbol, "short"):
                 self._open_trade(symbol, current_price, current_dc_upper, "short")
                 self.clear_flag(symbol, "short")
 
@@ -69,7 +70,7 @@ class BlackEcosystem(EcosystemBase):
         if (self.has_flag(symbol, "long") and
                 candle_high >= current_dc_upper and
                 current_price > current_ema):
-            if self.can_open_trade():
+            if self.can_open_trade() and not self.has_trade_for_symbol(symbol, "long"):
                 self._open_trade(symbol, current_price, current_dc_lower, "long")
                 self.clear_flag(symbol, "long")
 

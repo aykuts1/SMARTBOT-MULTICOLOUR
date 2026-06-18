@@ -198,26 +198,7 @@ class BotManager:
     def _on_tick(self, symbol, price):
         if not self.running:
             return
-
         self.data_pool.update_price(symbol, price)
-
-        # Anlık fiyata göre çalışan ekosistemler: Kırmızı, Gold
-        for name in ["kirmizi", "gold"]:
-            eco = self.ecosystems[name]
-            if eco.active:
-                try:
-                    eco.on_tick(symbol, price)
-                except Exception as e:
-                    log.error("%s on_tick hatasi (%s): %s", name, symbol, e)
-
-        # Tüm ekosistemlerin hedge ve çıkış kontrolleri tick'te yapılır
-        for name in ["beyaz", "sari", "siyah"]:
-            eco = self.ecosystems[name]
-            if eco.active:
-                try:
-                    eco.on_tick(symbol, price)
-                except Exception as e:
-                    log.error("%s on_tick hatasi (%s): %s", name, symbol, e)
 
     def _on_candle_close(self, symbol, candle):
         if not self.running:
@@ -245,6 +226,12 @@ class BotManager:
     # === ARKA PLAN THREAD'LERİ ===
 
     def _start_background_threads(self):
+        # 5 saniyelik ekosistem tarama döngüsü
+        self._scan_thread = threading.Thread(
+            target=self._scan_loop, daemon=True, name="scan_loop"
+        )
+        self._scan_thread.start()
+
         # Periyodik raporlar
         self._report_thread = threading.Thread(
             target=self._report_loop, daemon=True, name="report_loop"
@@ -262,6 +249,38 @@ class BotManager:
             target=self._config_watch_loop, daemon=True, name="config_watch"
         )
         self._config_thread.start()
+
+    def _scan_loop(self):
+        coins = self.config["global"]["coin_listesi"]
+        while not self._stop_event.is_set():
+            self._stop_event.wait(5)
+            if self._stop_event.is_set():
+                break
+            if not self.running:
+                continue
+
+            for symbol in coins:
+                price = self.data_pool.get_price(symbol)
+                if not price or price <= 0:
+                    continue
+
+                # Kırmızı ve Gold: giriş + çıkış + hedge
+                for name in ["kirmizi", "gold"]:
+                    eco = self.ecosystems[name]
+                    if eco.active:
+                        try:
+                            eco.on_tick(symbol, price)
+                        except Exception as e:
+                            log.error("%s scan hatasi (%s): %s", name, symbol, e)
+
+                # Beyaz, Sarı, Siyah: sadece çıkış + hedge
+                for name in ["beyaz", "sari", "siyah"]:
+                    eco = self.ecosystems[name]
+                    if eco.active:
+                        try:
+                            eco.on_tick(symbol, price)
+                        except Exception as e:
+                            log.error("%s scan hatasi (%s): %s", name, symbol, e)
 
     def _report_loop(self):
         last_1h = time.time()

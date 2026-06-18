@@ -11,6 +11,7 @@ class WhiteEcosystem(EcosystemBase):
     def __init__(self, config, data_pool, trade_executor, telegram_bot=None):
         super().__init__("beyaz", config, data_pool, trade_executor, telegram_bot)
         self.pending_signals = {}
+        self._last_scan = {}
 
     def on_candle_close(self, symbol, candle):
         if not self.active:
@@ -76,7 +77,7 @@ class WhiteEcosystem(EcosystemBase):
             if side == "long" and price <= ema:
                 return
 
-            if self.can_open_trade():
+            if self.can_open_trade() and not self.has_trade_for_symbol(symbol, side):
                 self._open_trade(symbol, price, atr, side)
             return
 
@@ -111,7 +112,7 @@ class WhiteEcosystem(EcosystemBase):
                     return
 
                 del self.pending_signals[key]
-                if self.can_open_trade():
+                if self.can_open_trade() and not self.has_trade_for_symbol(symbol, side):
                     self._open_trade(symbol, price, atr, side)
 
     def _age_pending_signals(self, symbol):

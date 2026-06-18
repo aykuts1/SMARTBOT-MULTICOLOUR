@@ -10,6 +10,7 @@ class YellowEcosystem(EcosystemBase):
     def __init__(self, config, data_pool, trade_executor, telegram_bot=None):
         super().__init__("sari", config, data_pool, trade_executor, telegram_bot)
         self.touch_counters = {}
+        self._last_scan = {}
 
     def on_candle_close(self, symbol, candle):
         if not self.active:
@@ -46,7 +47,7 @@ class YellowEcosystem(EcosystemBase):
 
             if self.touch_counters[short_key] >= required:
                 self.touch_counters[short_key] = 0
-                if self.can_open_trade():
+                if self.can_open_trade() and not self.has_trade_for_symbol(symbol, "short"):
                     self._open_trade(symbol, candle["close"], current_bb_middle, "short")
         else:
             if short_key in self.touch_counters:
@@ -61,7 +62,7 @@ class YellowEcosystem(EcosystemBase):
 
             if self.touch_counters[long_key] >= required:
                 self.touch_counters[long_key] = 0
-                if self.can_open_trade():
+                if self.can_open_trade() and not self.has_trade_for_symbol(symbol, "long"):
                     self._open_trade(symbol, candle["close"], current_bb_middle, "long")
         else:
             if long_key in self.touch_counters:

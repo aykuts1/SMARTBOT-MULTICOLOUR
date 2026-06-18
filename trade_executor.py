@@ -19,7 +19,7 @@ class TradeExecutor:
     def reload_config(self, config):
         self.config = config
 
-    def open_trade(self, symbol, side, ecosystem, entry_price=None):
+    def open_trade(self, symbol, side, ecosystem, entry_price=None, fixed_qty=None):
         cfg = self.config.get("global", {})
         max_retries = cfg.get("islem_acma_deneme", 3)
         retry_delay = cfg.get("islem_acma_bekleme_sn", 2)
@@ -39,11 +39,16 @@ class TradeExecutor:
             log.error("%s: Fiyat alinamadi", symbol)
             return None
 
-        qty, margin, notional = calc_position_size(balance, margin_pct, leverage, price)
-
         min_qty = self.client.get_min_qty(symbol)
         qty_step = self.client.get_qty_step(symbol)
-        rounded_qty = qty_round_down(qty, qty_step)
+
+        if fixed_qty is not None:
+            rounded_qty = fixed_qty
+            actual_notional = rounded_qty * price
+            margin = actual_notional / leverage
+        else:
+            qty, margin, notional = calc_position_size(balance, margin_pct, leverage, price)
+            rounded_qty = qty_round_down(qty, qty_step)
 
         if rounded_qty < min_qty:
             log.warning("%s %s: Minimum buyukluk altinda (%.6f < %.6f)",

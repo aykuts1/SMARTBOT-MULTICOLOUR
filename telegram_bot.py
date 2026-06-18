@@ -820,19 +820,51 @@ Stop loss'lar aktif."""
     def cmd_iptal(self, chat_id, args):
         self._reply(chat_id, "❌ İşlem iptal edildi.")
 
+    def cmd_yardim(self, chat_id, args):
+        msg = """📋 KOMUT LİSTESİ
+
+📊 Bilgi Komutları:
+  /durum — Bot durumu ve ekosistemler
+  /anlik — Anlık PnL ve pozisyon özeti
+  /bakiye — Bakiye detayı
+  /pnl — Kar/zarar raporu
+  /pozisyonlar — Açık pozisyonlar listesi
+  /flagler — Açık flagler
+  /log — Son 10 olay
+
+⚙️ Kontrol Komutları:
+  /durdur — Botu durdur (onay ister)
+  /baslat — Botu başlat
+  /kapat_hepsi — Tüm pozisyonları kapat (onay ister)
+  /panic — Tüm kapat + botu durdur (onay ister)
+
+🌿 Ekosistem Komutları:
+  /ekosistem_durdur [ad] — Ekosistemi durdur
+  /ekosistem_baslat [ad] — Ekosistemi başlat
+  Ekosistem adları: kirmizi, beyaz, sari, siyah, gold
+
+❌ /iptal — Bekleyen onayı iptal et"""
+        self._reply(chat_id, msg)
+
     def start_polling(self):
         if not self.token:
             log.warning("Telegram token bulunamadi, komutlar devre disi")
             return
-        try:
-            req_lib.get(
-                f"https://api.telegram.org/bot{self.token}/deleteWebhook",
-                params={"drop_pending_updates": True},
-                timeout=10
-            )
-            log.info("Webhook silindi")
-        except Exception as e:
-            log.warning("Webhook silme hatasi: %s", e)
+        for attempt in range(3):
+            try:
+                resp = req_lib.post(
+                    f"https://api.telegram.org/bot{self.token}/deleteWebhook",
+                    json={"drop_pending_updates": True},
+                    timeout=10
+                )
+                data = resp.json()
+                if data.get("result"):
+                    log.info("Webhook silindi")
+                    break
+                log.warning("Webhook silinemedi (deneme %d): %s", attempt + 1, data)
+            except Exception as e:
+                log.warning("Webhook silme hatasi (deneme %d): %s", attempt + 1, e)
+            time.sleep(2)
         thread = threading.Thread(target=self._run_polling, daemon=True)
         thread.start()
         log.info("Telegram polling baslatildi")
@@ -857,6 +889,7 @@ Stop loss'lar aktif."""
             "panic_onayla": self.cmd_panic_onayla,
             "flagler": self.cmd_flagler,
             "iptal": self.cmd_iptal,
+            "yardim": self.cmd_yardim,
         }
         offset = None
         log.info("Telegram getUpdates dongusu basladi")
@@ -884,11 +917,19 @@ Stop loss'lar aktif."""
                     parts = text.split()
                     cmd = parts[0].split("@")[0][1:].lower()
                     args = parts[1:]
+                    log.info("Komut alindi: /%s (chat_id=%s)", cmd, chat_id)
                     handler = commands.get(cmd)
                     if handler:
-                        threading.Thread(
-                            target=handler, args=(chat_id, args), daemon=True
-                        ).start()
+                        def _dispatch(h=handler, cid=chat_id, a=args, c=cmd):
+                            try:
+                                h(cid, a)
+                            except Exception as ex:
+                                log.error("Komut hatasi (/%s): %s", c, ex)
+                                self._reply(cid, f"❌ Komut çalıştırılırken hata: {ex}")
+                        threading.Thread(target=_dispatch, daemon=True).start()
+                    else:
+                        log.warning("Bilinmeyen komut: /%s", cmd)
+                        self._reply(chat_id, f"❓ Bilinmeyen komut: /{cmd}")
             except Exception as e:
                 log.error("Telegram polling hatasi: %s", e)
                 time.sleep(5)

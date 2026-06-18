@@ -6,7 +6,7 @@
         "kaldirac": 50,
         "marjin_orani": 0.02,
         "stop_loss_orani": 0.02,
-        "ekosistem_basina_max_islem": 20,
+        "ekosistem_basina_max_islem": 10,
         "baslangic_mum_sayisi": 200,
         "timeframe": "30",
         "coin_listesi": [
@@ -41,13 +41,7 @@
         "flag_giris_atr": 1,
         "islem_giris_atr": 2,
         "mavi_hedge_giris_atr": 0.5,
-        "chandelier_atr_carpani": 2,
-        "kirmizi_1_giris_atr": 4,
-        "kirmizi_1_lose_exit_atr": 2,
-        "kirmizi_1_winrate_atr": 5,
-        "kirmizi_2_giris_atr": 6,
-        "kirmizi_2_lose_exit_atr": 2,
-        "kirmizi_2_winrate_atr": 5
+        "chandelier_atr_carpani": 2
     },
 
     "beyaz": {

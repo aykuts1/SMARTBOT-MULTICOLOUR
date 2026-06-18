@@ -8,6 +8,7 @@ log = get_logger("ecosystem_gold")
 class GoldEcosystem(EcosystemBase):
     def __init__(self, config, data_pool, trade_executor, telegram_bot=None):
         super().__init__("gold", config, data_pool, trade_executor, telegram_bot)
+        self._prev_prices = {}
 
     def _get_band_levels(self, symbol):
         ind = self.data_pool.get_indicators(symbol)
@@ -33,61 +34,69 @@ class GoldEcosystem(EcosystemBase):
         if not self.active:
             return
 
+        prev_price = self._prev_prices.get(symbol)
+        self._prev_prices[symbol] = price
+
         levels = self._get_band_levels(symbol)
         if not levels:
             return
 
+        if prev_price is not None:
+            self._check_entries(symbol, price, prev_price, levels)
+
+        self._check_hedge_entries(symbol, price, levels)
+        self._check_exits(symbol, price, levels)
+
+    def _check_entries(self, symbol, price, prev_price, levels):
         ema = levels["ema"]
-        atr = levels["atr"]
         alt1 = levels.get("alt1", 0)
-        alt2 = levels.get("alt2", 0)
         ust1 = levels.get("ust1", 0)
-        ust2 = levels.get("ust2", 0)
-        ust3 = levels.get("ust3", 0)
-        alt3 = levels.get("alt3", 0)
-        alt7 = levels.get("alt7", 0)
-        ust7 = levels.get("ust7", 0)
 
         # --- SHORT ---
-        # Flag: fiyat EMA21'i aşağı keserse
-        if price < ema:
-            if not self.has_flag(symbol, "short"):
+        # Bayrak: önceki tarama EMA üstünde, şimdiki EMA altında
+        if prev_price > ema and price < ema:
+            if not self.has_flag(symbol, "short_block"):
                 self.set_flag(symbol, "short", True)
-        elif price > ema:
+                log.debug("GOLD short bayrak acildi: %s", symbol)
+
+        # Bayrak sıfırlama: önceki tarama EMA altında, şimdiki EMA üstünde
+        if prev_price < ema and price > ema:
             self.clear_flag(symbol, "short")
             self.clear_flag(symbol, "short_block")
 
-        # Giriş: Alt 1'i aşağı keserse + Flag açıksa + henüz girilmemişse
-        if price < alt1 and self.has_flag(symbol, "short") and not self.has_flag(symbol, "short_block"):
-            if self.can_open_trade():
+        # Giriş: önceki tarama alt1 üstünde, şimdiki alt1 altında + bayrak açık
+        if (prev_price > alt1 and price < alt1
+                and self.has_flag(symbol, "short")
+                and not self.has_flag(symbol, "short_block")):
+            if self.can_open_trade() and not self.has_trade_for_symbol(symbol, "short"):
                 self.set_flag(symbol, "short_block", True)
                 self.clear_flag(symbol, "short")
                 self._open_trade(symbol, price, levels, "short")
 
-        # --- LONG (simetri) ---
-        if price > ema:
-            if not self.has_flag(symbol, "long"):
+        # --- LONG ---
+        # Bayrak: önceki tarama EMA altında, şimdiki EMA üstünde
+        if prev_price < ema and price > ema:
+            if not self.has_flag(symbol, "long_block"):
                 self.set_flag(symbol, "long", True)
-        elif price < ema:
+                log.debug("GOLD long bayrak acildi: %s", symbol)
+
+        # Bayrak sıfırlama: önceki tarama EMA üstünde, şimdiki EMA altında
+        if prev_price > ema and price < ema:
             self.clear_flag(symbol, "long")
             self.clear_flag(symbol, "long_block")
 
-        if price > ust1 and self.has_flag(symbol, "long") and not self.has_flag(symbol, "long_block"):
-            if self.can_open_trade():
+        # Giriş: önceki tarama üst1 altında, şimdiki üst1 üstünde + bayrak açık
+        if (prev_price < ust1 and price > ust1
+                and self.has_flag(symbol, "long")
+                and not self.has_flag(symbol, "long_block")):
+            if self.can_open_trade() and not self.has_trade_for_symbol(symbol, "long"):
                 self.set_flag(symbol, "long_block", True)
                 self.clear_flag(symbol, "long")
                 self._open_trade(symbol, price, levels, "long")
 
-        # --- Hedge kontrolü ---
-        self._check_hedge_entries(symbol, price, levels)
-
-        # --- Çıkış kontrolleri (dinamik seviyeler) ---
-        self._check_exits(symbol, price, levels)
-
     def _open_trade(self, symbol, price, levels, side):
         atr = levels["atr"]
 
-        # Gold dinamik seviyeli; açılış anındaki referans değerleri tabloya yaz (info amaçlı)
         if side == "short":
             lose_exit_initial = levels.get("ust3", 0)
             winrate_initial = levels.get("alt7", 0)
@@ -103,7 +112,7 @@ class GoldEcosystem(EcosystemBase):
             "chandelier_distance": self.config.get("chandelier_atr_carpani", 1) * atr,
             "atr": atr,
             "chandelier_started": False,
-            "dynamic": True  # Gold dinamik - değerler bilgi amaçlı, gerçek kontrol _check_exits'te
+            "dynamic": True
         }
 
         trade_info = self.executor.open_trade(
@@ -150,14 +159,11 @@ class GoldEcosystem(EcosystemBase):
                 chandelier_dist = self.config.get("chandelier_atr_carpani", 1) * atr
 
                 if trade.side == "short":
-                    # Chandelier başlangıç: Alt 2'yi aşağı kesince başlar
                     if not trade.chandelier_active and price < alt2:
                         trade.chandelier_active = True
                         trade.chandelier_extreme = price
                         trade.table["chandelier_distance"] = chandelier_dist
-                        log.debug("GOLD short chandelier basladi: %s @ %.4f", symbol, price)
 
-                    # Chandelier kontrolü
                     if trade.chandelier_active:
                         trade.table["chandelier_distance"] = chandelier_dist
                         if price < trade.chandelier_extreme:
@@ -167,23 +173,19 @@ class GoldEcosystem(EcosystemBase):
                             trades_to_close.append((trade, "Chandelier"))
                             continue
 
-                    # Lose Exit: Üst 3 (dinamik)
                     if price >= ust3:
                         trades_to_close.append((trade, "Lose Exit"))
                         continue
 
-                    # Winrate: Alt 7 (dinamik)
                     if price <= alt7:
                         trades_to_close.append((trade, "Winrate"))
                         continue
 
-                else:  # long
-                    # Chandelier başlangıç: Üst 2'yi yukarı kesince başlar
+                else:
                     if not trade.chandelier_active and price > ust2:
                         trade.chandelier_active = True
                         trade.chandelier_extreme = price
                         trade.table["chandelier_distance"] = chandelier_dist
-                        log.debug("GOLD long chandelier basladi: %s @ %.4f", symbol, price)
 
                     if trade.chandelier_active:
                         trade.table["chandelier_distance"] = chandelier_dist
@@ -194,12 +196,10 @@ class GoldEcosystem(EcosystemBase):
                             trades_to_close.append((trade, "Chandelier"))
                             continue
 
-                    # Lose Exit: Alt 3 (dinamik)
                     if price <= alt3:
                         trades_to_close.append((trade, "Lose Exit"))
                         continue
 
-                    # Winrate: Üst 7 (dinamik)
                     if price >= ust7:
                         trades_to_close.append((trade, "Winrate"))
                         continue
@@ -211,7 +211,6 @@ class GoldEcosystem(EcosystemBase):
                 if self.telegram:
                     self.telegram.send_trade_closed(close_info)
 
-        # Hedge çıkışları
         hedge_to_close = []
         with self._lock:
             for hedge in list(self.hedge_trades):
@@ -224,8 +223,10 @@ class GoldEcosystem(EcosystemBase):
                         hedge_to_close.append((hedge, "Bagli islem kapandi"))
                         continue
 
+                alt1 = levels.get("alt1", 0)
+                ust1 = levels.get("ust1", 0)
+
                 if hedge.side == "long":
-                    alt1 = levels.get("alt1", 0)
                     if price < alt1:
                         hedge_to_close.append((hedge, "Alt 1 altina dustu"))
                         continue
@@ -233,7 +234,6 @@ class GoldEcosystem(EcosystemBase):
                         hedge_to_close.append((hedge, "Ust 3 hedefine ulasti"))
                         continue
                 else:
-                    ust1 = levels.get("ust1", 0)
                     if price > ust1:
                         hedge_to_close.append((hedge, "Ust 1 ustune cikti"))
                         continue
@@ -260,32 +260,25 @@ class GoldEcosystem(EcosystemBase):
             flag_key = f"silver_hedge_{id(main_trade)}"
 
             if main_trade.side == "short":
-                # Silver Long: Flag → Alt 1'i yukarı keserse, Giriş → EMA21'i yukarı keserse
                 if price > alt1:
                     if not self.has_flag(symbol, flag_key):
                         self.set_flag(symbol, flag_key, True)
-
                 if price > ema and self.has_flag(symbol, flag_key):
                     existing = self.find_hedge_trades_for_parent(main_trade)
                     if not existing:
                         self._open_hedge(main_trade, symbol, price, "long")
                         self.clear_flag(symbol, flag_key)
-
                 if price < alt1:
                     self.clear_flag(symbol, flag_key)
-
-            else:  # main long
-                # Silver Short: Flag → Üst 1'i aşağı keserse, Giriş → EMA21'i aşağı keserse
+            else:
                 if price < ust1:
                     if not self.has_flag(symbol, flag_key):
                         self.set_flag(symbol, flag_key, True)
-
                 if price < ema and self.has_flag(symbol, flag_key):
                     existing = self.find_hedge_trades_for_parent(main_trade)
                     if not existing:
                         self._open_hedge(main_trade, symbol, price, "short")
                         self.clear_flag(symbol, flag_key)
-
                 if price > ust1:
                     self.clear_flag(symbol, flag_key)
 
