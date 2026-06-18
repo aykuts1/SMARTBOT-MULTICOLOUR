@@ -304,6 +304,14 @@ class BybitClient:
                     "order_id": order_id,
                     "qty": rounded_qty
                 }
+            elif result["retCode"] == 110017:
+                log.warning("Kapatma: %s %s pozisyon zaten kapali (110017), internal state temizleniyor", symbol, side)
+                return {
+                    "success": True,
+                    "already_closed": True,
+                    "order_id": "",
+                    "qty": rounded_qty
+                }
             else:
                 log.error("Kapatma hatasi: %s %s - %s", symbol, side, result["retMsg"])
                 return {

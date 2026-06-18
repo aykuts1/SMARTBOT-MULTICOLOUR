@@ -808,13 +808,26 @@ Stop loss'lar aktif."""
         if not flags:
             self._reply(chat_id, "🚩 Şu an açık flag bulunmuyor.")
             return
-        msg = f"🚩 AÇIK FLAGLER\n🕐 {now_str()}\n\nToplam: {len(flags)} flag\n"
+
+        by_eco = {}
         for f in flags:
-            elapsed = time.time() - f.get("time", time.time())
-            msg += f"\n{f['symbol']}  {f['flag_name']}\n   🕐 {format_duration(elapsed)} önce"
-            if "extra" in f:
-                msg += f"\n   🔁 {f['extra']}"
-            msg += "\n"
+            eco = f.get("ecosystem", "bilinmiyor")
+            by_eco.setdefault(eco, []).append(f)
+
+        msg = f"🚩 AÇIK FLAGLER\n🕐 {now_str()}\n\nToplam: {len(flags)} flag\n"
+        for eco_name in ["kirmizi", "beyaz", "sari", "siyah", "gold"]:
+            if eco_name not in by_eco:
+                continue
+            eco_flags = by_eco[eco_name]
+            msg += (f"\n─────────────────────\n"
+                    f"{ecosystem_emoji(eco_name)} {ecosystem_display_name(eco_name).upper()}"
+                    f"  ({len(eco_flags)} flag)\n")
+            for f in eco_flags:
+                elapsed = time.time() - f.get("time", time.time())
+                msg += f"\n  {f['symbol']}  {f['flag_name']}\n  🕐 {format_duration(elapsed)} önce"
+                if "extra" in f:
+                    msg += f"\n  🔁 {f['extra']}"
+                msg += "\n"
         self._reply(chat_id, msg[:4096])
 
     def cmd_iptal(self, chat_id, args):

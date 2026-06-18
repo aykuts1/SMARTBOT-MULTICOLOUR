@@ -476,8 +476,10 @@ class BotManager:
 
     def get_all_flags(self):
         all_flags = []
-        for eco in self.ecosystems.values():
-            all_flags.extend(eco.get_open_flags())
+        for eco_name, eco in self.ecosystems.items():
+            for flag in eco.get_open_flags():
+                flag["ecosystem"] = eco_name
+                all_flags.append(flag)
         return all_flags
 
     def get_recent_events(self, count=10):
