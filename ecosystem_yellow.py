@@ -9,7 +9,10 @@ log = get_logger("ecosystem_yellow")
 class YellowEcosystem(EcosystemBase):
     def __init__(self, config, data_pool, trade_executor, telegram_bot=None):
         super().__init__("sari", config, data_pool, trade_executor, telegram_bot)
+        self.max_trades = config.get("max_sari_islem", 10)
+        self.max_hedge_trades = config.get("max_turuncu_islem", 10)
         self.touch_counters = {}
+        self._prev_prices = {}
         self._last_scan = {}
 
     def on_candle_close(self, symbol, candle):
@@ -90,6 +93,7 @@ class YellowEcosystem(EcosystemBase):
                 sl_price=trade_info["sl_price"],
                 order_id=trade_info["order_id"]
             )
+            trade.chandelier_active = False
             self.add_trade(trade)
 
             if self.telegram:
@@ -100,10 +104,12 @@ class YellowEcosystem(EcosystemBase):
     def on_tick(self, symbol, price):
         if not self.active:
             return
-        self._check_hedge_entries(symbol, price)
+        prev_price = self._prev_prices.get(symbol)
+        self._prev_prices[symbol] = price
+        self._check_hedge_entries(symbol, price, prev_price)
         self._check_exits_tick(symbol, price)
 
-    def _check_hedge_entries(self, symbol, price):
+    def _check_hedge_entries(self, symbol, price, prev_price=None):
         with self._lock:
             main_trades = [t for t in self.trades if t.symbol == symbol]
 
@@ -111,31 +117,37 @@ class YellowEcosystem(EcosystemBase):
             hedge_side = "long" if main_trade.side == "short" else "short"
             entry_line = main_trade.table.get("entry", 0)
             hedge_line = main_trade.table.get("hedge_entry", 0)
-
             flag_key = f"turuncu_hedge_{id(main_trade)}"
 
+            if prev_price is None:
+                continue
+
             if hedge_side == "long":
-                if price > entry_line:
+                # Fiyat giriş çizgisini yukarı kestiyse flag aç
+                if prev_price <= entry_line and price > entry_line:
                     if not self.has_flag(symbol, flag_key):
                         self.set_flag(symbol, flag_key, True)
-                elif price < entry_line:
+                # Fiyat giriş çizgisinin altına düşerse flag sıfırla
+                if price < entry_line:
                     self.clear_flag(symbol, flag_key)
-
-                if price > hedge_line and self.has_flag(symbol, flag_key):
+                # Turuncu: hedge çizgisini yukarı kesti + flag açık
+                if prev_price <= hedge_line and price > hedge_line and self.has_flag(symbol, flag_key):
                     existing = self.find_hedge_trades_for_parent(main_trade)
-                    if not existing:
+                    if not existing and self.can_open_hedge():
                         self._open_hedge(main_trade, symbol, price, hedge_side)
                         self.clear_flag(symbol, flag_key)
             else:
-                if price < entry_line:
+                # Fiyat giriş çizgisini aşağı kestiyse flag aç
+                if prev_price >= entry_line and price < entry_line:
                     if not self.has_flag(symbol, flag_key):
                         self.set_flag(symbol, flag_key, True)
-                elif price > entry_line:
+                # Fiyat giriş çizgisinin üstüne çıkarsa flag sıfırla
+                if price > entry_line:
                     self.clear_flag(symbol, flag_key)
-
-                if price < hedge_line and self.has_flag(symbol, flag_key):
+                # Turuncu: hedge çizgisini aşağı kesti + flag açık
+                if prev_price >= hedge_line and price < hedge_line and self.has_flag(symbol, flag_key):
                     existing = self.find_hedge_trades_for_parent(main_trade)
-                    if not existing:
+                    if not existing and self.can_open_hedge():
                         self._open_hedge(main_trade, symbol, price, hedge_side)
                         self.clear_flag(symbol, flag_key)
 
@@ -175,12 +187,39 @@ class YellowEcosystem(EcosystemBase):
     def _check_exits_candle(self, symbol, price):
         self._check_exits_tick(symbol, price)
 
+    def _activate_chandelier_if_ready(self, trade, price):
+        if trade.chandelier_active:
+            return
+        distance = trade.table.get("distance", 0)
+        entry = trade.table.get("entry", trade.entry_price)
+        if distance <= 0:
+            return
+        if trade.side == "short" and price <= entry - distance:
+            trade.chandelier_active = True
+            trade.chandelier_extreme = price
+            if self.telegram:
+                chandelier_level = price + trade.table.get("chandelier_distance", distance)
+                self.telegram.send_chandelier_activated(
+                    trade.symbol, trade.ecosystem, trade.side,
+                    trade.entry_price, price, chandelier_level
+                )
+        elif trade.side == "long" and price >= entry + distance:
+            trade.chandelier_active = True
+            trade.chandelier_extreme = price
+            if self.telegram:
+                chandelier_level = price - trade.table.get("chandelier_distance", distance)
+                self.telegram.send_chandelier_activated(
+                    trade.symbol, trade.ecosystem, trade.side,
+                    trade.entry_price, price, chandelier_level
+                )
+
     def _check_exits_tick(self, symbol, price):
         trades_to_close = []
         with self._lock:
             for trade in list(self.trades):
                 if trade.symbol != symbol:
                     continue
+                self._activate_chandelier_if_ready(trade, price)
                 if self.check_winrate(trade, price):
                     trades_to_close.append((trade, "Winrate"))
                 elif self.check_lose_exit(trade, price):

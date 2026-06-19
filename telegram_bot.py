@@ -156,7 +156,7 @@ Stop loss'lar aktif."""
 
         self.record_open(ecosystem.lower())
 
-        is_hedge = ecosystem.lower() in ("mavi", "mavi1", "mavi2", "mor", "turuncu", "gri", "silver")
+        is_hedge = ecosystem.lower() in ("mor", "turuncu", "gri", "gumus")
         is_dynamic = table.get("dynamic", False)
 
         msg = f"""{side_emoji(side)} İŞLEM AÇILDI — {side_display(side)}
@@ -325,6 +325,52 @@ Stop loss'lar aktif."""
 ⏱️ Kesinti Süresi: {format_duration(downtime)}"""
         self.send(msg)
 
+    def send_chandelier_activated(self, symbol, ecosystem, side, entry_price, current_price, chandelier_level):
+        msg = f"""🕯️ CHANDELİER AKTİF
+
+🪙 {symbol}  |  {ecosystem_emoji(ecosystem)} {ecosystem_display_name(ecosystem)}
+🕐 {now_str()}
+
+📊 Yön:         {side_display(side)}
+💵 Giriş:       {format_usdt(entry_price)} USDT
+📍 Şu An:       {format_usdt(current_price)} USDT
+🎯 Kapanış Hat: {format_usdt(chandelier_level)} USDT
+
+⏳ Trailing stop aktif — fiyat geri dönerse kapanır."""
+        self.send(msg)
+
+    def send_external_close(self, trade):
+        import time as _t
+        duration = format_duration(_t.time() - getattr(trade, "open_time", _t.time()))
+        msg = f"""⚠️ DIŞ KAPANIŞ TESPİT EDİLDİ
+
+🪙 {trade.symbol}  |  {ecosystem_emoji(trade.ecosystem)} {ecosystem_display_name(trade.ecosystem)}
+🕐 {now_str()}
+
+📊 Yön:    {side_display(trade.side)}
+💵 Giriş:  {format_usdt(trade.entry_price)} USDT
+📦 Miktar: {trade.qty:.6f}
+⏱️ Süre:   {duration}
+
+❓ Neden: Stop Loss / Manuel Kapatma / Likidite
+🗑️ Bot takibinden kaldırıldı."""
+        self.send(msg)
+
+    def send_untracked_positions(self, positions):
+        if not positions:
+            return
+        msg = f"⚠️ YENİDEN BAŞLADI — TAKİPSİZ POZİSYONLAR\n🕐 {now_str()}\n\n{len(positions)} işlem bot takibinde değil:\n"
+        for pos in positions:
+            link_id = pos.get("order_link_id", "")
+            pnl = pos.get("unrealised_pnl", 0)
+            sign = "+" if pnl >= 0 else ""
+            msg += (f"\n  🔸 {pos['symbol']}  {side_display(pos['side'])}\n"
+                    f"  💵 {format_usdt(pos['entry_price'])} USDT  📦 {pos['size']:.6f}\n"
+                    f"  💰 PnL: {sign}{format_usdt(pnl)} USDT\n"
+                    f"  🔗 {link_id}\n")
+        msg += "\n⚠️ Bu işlemler bot tarafından yönetilmiyor.\nStop loss aktif, çıkış mantığı çalışmaz."
+        self.send(msg)
+
     def send_critical_error(self, error):
         msg = f"""🚨 KRİTİK HATA — GÜVENLİK MODU
 
@@ -344,7 +390,7 @@ Stop loss'lar aktif."""
         pct = (pnl / balance * 100) if balance > 0 else 0
 
         eco_lines = []
-        for name in ["kirmizi", "beyaz", "sari", "siyah", "gold"]:
+        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi", "mavi"]:
             eco = stats["ecosystem_stats"].get(name, {})
             oc = open_counts.get(name, 0)
             closed = eco.get("closed", 0)
@@ -490,7 +536,7 @@ Stop loss'lar aktif."""
     def _build_eco_table(self, stats, open_counts, show_winpct=False):
         header = "📊 Ekosistem Detayı:\n"
         lines = []
-        for name in ["kirmizi", "beyaz", "sari", "siyah", "gold"]:
+        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi", "mavi"]:
             eco = stats["ecosystem_stats"].get(name, {})
             oc = open_counts.get(name, 0)
             opened = eco.get("opened", 0)
@@ -507,7 +553,7 @@ Stop loss'lar aktif."""
 
     def _build_eco_pnl(self, stats, show_icon=False):
         lines = ["💰 Ekosistem PnL:"]
-        for name in ["kirmizi", "beyaz", "sari", "siyah", "gold"]:
+        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi", "mavi"]:
             eco = stats["ecosystem_stats"].get(name, {})
             epnl = eco.get("pnl", 0.0)
             sign = "+" if epnl >= 0 else ""
@@ -573,7 +619,7 @@ Stop loss'lar aktif."""
         total = sum(oc.values())
 
         eco_lines = []
-        for name in ["kirmizi", "beyaz", "sari", "siyah", "gold"]:
+        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi", "mavi"]:
             eco = self.daily_stats["ecosystem_stats"].get(name, {})
             epnl = eco.get("pnl", 0.0)
             sign = "+" if epnl >= 0 else ""
@@ -607,11 +653,11 @@ Stop loss'lar aktif."""
         uptime = format_duration(info.get("uptime", 0))
         oc = info.get("open_counts", {})
         eco_states = info.get("ecosystem_states", {})
-        ws_ok = info.get("ws_connected", False)
+        ws_ok = info.get("price_ok", False)
         last_data = info.get("last_data_ago", -1)
 
         eco_lines = []
-        for name in ["kirmizi", "beyaz", "sari", "siyah", "gold"]:
+        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi", "mavi"]:
             active = eco_states.get(name, False)
             icon = "✅" if active else "⛔"
             count = oc.get(name, 0)
@@ -639,10 +685,142 @@ Stop loss'lar aktif."""
   ● Kapanan:  {self.daily_stats['closed']}
   ● Atlanan:  {self.daily_stats['skipped']}
 
-🌐 Bybit Bağlantısı:  {'✅ Aktif' if ws_ok else '❌ Kopuk'}
-📡 Websocket:         {'✅ Aktif' if ws_ok else '❌ Kopuk'}
-🕐 Son Veri:          {f'{last_data:.0f} sn önce' if last_data >= 0 else 'Yok'}"""
+📡 Fiyat Verisi:      {'✅ Aktif' if ws_ok else '❌ Kopuk'}
+🕐 Son Güncelleme:    {f'{last_data:.0f} sn önce' if last_data >= 0 else 'Yok'}"""
         self._reply(chat_id, msg)
+
+    def cmd_islemler(self, chat_id, args):
+        if not self.bot_manager:
+            return
+        positions = self.bot_manager.get_all_positions()
+
+        groups = [
+            ("beyaz",   ["beyaz", "mor"]),
+            ("sari",    ["sari", "turuncu"]),
+            ("siyah",   ["siyah", "gri"]),
+            ("altin",   ["altin", "gumus"]),
+            ("kirmizi", ["kirmizi", "mavi"]),
+        ]
+
+        by_eco = {}
+        for p in positions:
+            eco = p.get("ecosystem", "")
+            by_eco.setdefault(eco, []).append(p)
+
+        total = len(positions)
+        total_pnl = sum(p.get("pnl", 0) for p in positions)
+        pnl_sign = "+" if total_pnl >= 0 else ""
+        msg = f"📊 İŞLEMLER  |  Toplam: {total}\n🕐 {now_str()}\n💰 PnL: {pnl_sign}{format_usdt(total_pnl)} USDT\n"
+
+        has_any = False
+        for parent, threads in groups:
+            group_trades = [(eco, by_eco[eco]) for eco in threads if eco in by_eco]
+            if not group_trades:
+                continue
+            has_any = True
+            msg += f"\n{'─'*22}\n"
+            for eco, trades in group_trades:
+                msg += f"{ecosystem_emoji(eco)} {ecosystem_display_name(eco).upper()}  ({len(trades)})\n"
+                for p in trades:
+                    pnl = p.get("pnl", 0)
+                    sign = "+" if pnl >= 0 else ""
+                    dur = format_duration(p.get("duration", 0))
+                    msg += (f"  {p['symbol']}  {side_display(p['side'])}\n"
+                            f"  💵 {format_usdt(p['entry_price'])} → {format_usdt(p.get('current_price',0))}"
+                            f"  {sign}{format_usdt(pnl)}  ⏱{dur}\n")
+                msg += "\n"
+
+        if not has_any:
+            msg += "\nAçık işlem yok."
+
+        self._reply(chat_id, msg[:4096])
+
+    def cmd_borsada(self, chat_id, args):
+        if not self.bot_manager:
+            return
+        orphans = self.bot_manager.get_orphan_positions()
+
+        if not orphans:
+            self._reply(chat_id, "✅ BOT DIŞI POZİSYON YOK\n\nBorsadaki tüm açık pozisyonlar bot tarafından takip ediliyor.")
+            return
+
+        our_list = [p for p in orphans if p["pos_type"] == "bizim"]
+        foreign_list = [p for p in orphans if p["pos_type"] == "yabanci"]
+
+        msg = f"⚠️ BOT DIŞI POZİSYONLAR\n🕐 {now_str()}\nToplam: {len(orphans)}\n"
+
+        if our_list:
+            msg += f"\n🔸 ESKİ BOT İŞLEMLERİ ({len(our_list)}):\n"
+            for pos in our_list:
+                pnl = pos.get("unrealised_pnl", 0)
+                sign = "+" if pnl >= 0 else ""
+                msg += (f"\n  {pos['symbol']}  {side_display(pos['side'])}\n"
+                        f"  💵 {format_usdt(pos['entry_price'])} USDT  📦 {pos['size']:.6f}\n"
+                        f"  💰 PnL: {sign}{format_usdt(pnl)} USDT\n"
+                        f"  🔗 {pos.get('order_link_id', '')}\n")
+
+        if foreign_list:
+            msg += f"\n🔴 YABANCI POZİSYONLAR ({len(foreign_list)}):\n"
+            for pos in foreign_list:
+                pnl = pos.get("unrealised_pnl", 0)
+                sign = "+" if pnl >= 0 else ""
+                msg += (f"\n  {pos['symbol']}  {side_display(pos['side'])}\n"
+                        f"  💵 {format_usdt(pos['entry_price'])} USDT  📦 {pos['size']:.6f}\n"
+                        f"  💰 PnL: {sign}{format_usdt(pnl)} USDT\n")
+
+        msg += "\n⚠️ Bu pozisyonlar bot tarafından yönetilmiyor."
+        self._reply(chat_id, msg[:4096])
+
+    def cmd_rapor(self, chat_id, args):
+        periods = [
+            ("1 SAAT",  self.hourly_stats),
+            ("6 SAAT",  self.stats_6h),
+            ("12 SAAT", self.stats_12h),
+            ("24 SAAT", self.daily_stats),
+        ]
+        groups = [
+            ["beyaz", "mor"],
+            ["sari", "turuncu"],
+            ["siyah", "gri"],
+            ["altin", "gumus"],
+            ["kirmizi", "mavi"],
+        ]
+
+        msg = f"📊 PERFORMANS RAPORU\n🕐 {now_str()}\n"
+
+        for label, stats in periods:
+            total_closed = stats["closed"]
+            total_pnl = stats["pnl"]
+            pnl_sign = "+" if total_pnl >= 0 else ""
+            msg += f"\n{'─'*12} {label} {'─'*12}\n"
+            msg += f"📦 {total_closed} kapandı  💰 {pnl_sign}{format_usdt(total_pnl)} USDT\n"
+
+            has_any = False
+            for threads in groups:
+                for eco in threads:
+                    eco_s = stats["ecosystem_stats"].get(eco, {})
+                    closed = eco_s.get("closed", 0)
+                    if closed == 0:
+                        continue
+                    wins = eco_s.get("wins", 0)
+                    losses = eco_s.get("losses", 0)
+                    epnl = eco_s.get("pnl", 0.0)
+                    sign = "+" if epnl >= 0 else ""
+                    icon = "✅" if epnl >= 0 else "❌"
+                    has_any = True
+                    msg += (f"  {ecosystem_emoji(eco)} {ecosystem_display_name(eco)}:"
+                            f"  {closed}  {wins}W/{losses}L"
+                            f"  {sign}{format_usdt(epnl)} USDT  {icon}\n")
+
+            if not has_any:
+                msg += "  (bu sürede işlem yok)\n"
+
+        if len(msg) <= 4096:
+            self._reply(chat_id, msg)
+        else:
+            cut = msg.rfind("\n", 0, 4096)
+            self._reply(chat_id, msg[:cut])
+            self._reply(chat_id, msg[cut:8192])
 
     def cmd_pozisyonlar(self, chat_id, args):
         if not self.bot_manager:
@@ -750,7 +928,7 @@ Stop loss'lar aktif."""
         wr = (self.daily_stats["wins"] / self.daily_stats["closed"] * 100) if self.daily_stats["closed"] > 0 else 0
 
         eco_lines = []
-        for name in ["kirmizi", "beyaz", "sari", "siyah", "gold"]:
+        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi", "mavi"]:
             eco = self.daily_stats["ecosystem_stats"].get(name, {})
             epnl = eco.get("pnl", 0.0)
             sign = "+" if epnl >= 0 else ""
@@ -815,7 +993,7 @@ Stop loss'lar aktif."""
             by_eco.setdefault(eco, []).append(f)
 
         msg = f"🚩 AÇIK FLAGLER\n🕐 {now_str()}\n\nToplam: {len(flags)} flag\n"
-        for eco_name in ["kirmizi", "beyaz", "sari", "siyah", "gold"]:
+        for eco_name in ["beyaz", "sari", "siyah"]:
             if eco_name not in by_eco:
                 continue
             eco_flags = by_eco[eco_name]
@@ -841,6 +1019,9 @@ Stop loss'lar aktif."""
   /anlik — Anlık PnL ve pozisyon özeti
   /bakiye — Bakiye detayı
   /pnl — Kar/zarar raporu
+  /islemler — Ekosistem ve thread bazlı açık işlemler
+  /borsada — Borsada açık ama bot takibinde olmayan pozisyonlar
+  /rapor — 1s/6s/12s/24s performans raporu (ekosistem/thread bazlı)
   /pozisyonlar — Açık pozisyonlar listesi
   /flagler — Açık flagler
   /log — Son 10 olay
@@ -854,7 +1035,7 @@ Stop loss'lar aktif."""
 🌿 Ekosistem Komutları:
   /ekosistem_durdur [ad] — Ekosistemi durdur
   /ekosistem_baslat [ad] — Ekosistemi başlat
-  Ekosistem adları: kirmizi, beyaz, sari, siyah, gold
+  Ekosistem adları: beyaz, sari, siyah
 
 ❌ /iptal — Bekleyen onayı iptal et"""
         self._reply(chat_id, msg)
@@ -889,6 +1070,9 @@ Stop loss'lar aktif."""
             "baslat": self.cmd_baslat,
             "anlik": self.cmd_anlik,
             "durum": self.cmd_durum,
+            "islemler": self.cmd_islemler,
+            "borsada": self.cmd_borsada,
+            "rapor": self.cmd_rapor,
             "pozisyonlar": self.cmd_pozisyonlar,
             "kapat_hepsi": self.cmd_kapat_hepsi,
             "kapat_hepsi_onayla": self.cmd_kapat_hepsi_onayla,

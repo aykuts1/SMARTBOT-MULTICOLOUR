@@ -65,6 +65,7 @@ class EcosystemBase:
         self.flags = {}
         self.active = config.get("aktif", True)
         self.max_trades = 10
+        self.max_hedge_trades = 10
 
     def reload_config(self, config):
         self.config = config
@@ -74,12 +75,19 @@ class EcosystemBase:
         with self._lock:
             return len(self.trades)
 
+    def get_hedge_count(self):
+        with self._lock:
+            return len(self.hedge_trades)
+
     def get_total_count(self):
         with self._lock:
             return len(self.trades) + len(self.hedge_trades)
 
     def can_open_trade(self):
         return self.active and self.get_trade_count() < self.max_trades
+
+    def can_open_hedge(self):
+        return self.active and self.get_hedge_count() < self.max_hedge_trades
 
     def has_trade_for_symbol(self, symbol, side=None):
         with self._lock:

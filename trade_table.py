@@ -3,88 +3,10 @@ from logger_setup import get_logger
 log = get_logger("trade_table")
 
 
-def create_red_table(entry_price, ema48, atr, side="short"):
-    if side == "short":
-        lose_exit = ema48
-        alt1 = ema48 - 1 * atr
-        alt2 = ema48 - 2 * atr
-        alt3 = ema48 - 3 * atr
-        alt4 = ema48 - 4 * atr
-        alt5 = ema48 - 5 * atr
-        alt6 = ema48 - 6 * atr
-        alt7 = ema48 - 7 * atr
-        hedge_entry = entry_price + 0.5 * atr
-        winrate = alt7
-        return {
-            "side": side,
-            "entry": entry_price,
-            "lose_exit": lose_exit,
-            "winrate": winrate,
-            "hedge_entry": hedge_entry,
-            "ls_zone2_entry": alt1,
-            "ls_zone1_entry": entry_price + 0.5 * atr,
-            "zone2_entry": alt3,
-            "zone3_entry": alt4,
-            "zone4_entry": alt5,
-            "zone5_entry": alt6,
-            "chandelier_distance": 2 * atr,
-            "atr": atr
-        }
-    else:
-        lose_exit = ema48
-        ust1 = ema48 + 1 * atr
-        ust2 = ema48 + 2 * atr
-        ust3 = ema48 + 3 * atr
-        ust4 = ema48 + 4 * atr
-        ust5 = ema48 + 5 * atr
-        ust6 = ema48 + 6 * atr
-        ust7 = ema48 + 7 * atr
-        hedge_entry = entry_price - 0.5 * atr
-        winrate = ust7
-        return {
-            "side": side,
-            "entry": entry_price,
-            "lose_exit": lose_exit,
-            "winrate": winrate,
-            "hedge_entry": hedge_entry,
-            "ls_zone2_entry": ust1,
-            "ls_zone1_entry": entry_price - 0.5 * atr,
-            "zone2_entry": ust3,
-            "zone3_entry": ust4,
-            "zone4_entry": ust5,
-            "zone5_entry": ust6,
-            "chandelier_distance": 2 * atr,
-            "atr": atr
-        }
-
-
-def create_red_sub_table(entry_price, atr, le_atr, wr_atr, side="short"):
-    if side == "short":
-        return {
-            "side": side,
-            "entry": entry_price,
-            "lose_exit": entry_price + le_atr * atr,
-            "winrate": entry_price - wr_atr * atr,
-            "hedge_entry": entry_price + 0.5 * atr,
-            "chandelier_distance": 2 * atr,
-            "atr": atr
-        }
-    else:
-        return {
-            "side": side,
-            "entry": entry_price,
-            "lose_exit": entry_price - le_atr * atr,
-            "winrate": entry_price + wr_atr * atr,
-            "hedge_entry": entry_price - 0.5 * atr,
-            "chandelier_distance": 2 * atr,
-            "atr": atr
-        }
-
-
 def create_white_table(entry_price, atr, config, side="short"):
     le_atr = config.get("lose_exit_atr", 1.0)
     wr_atr = config.get("winrate_atr", 2.5)
-    hedge_atr = config.get("mor_hedge_giris_atr", 0.25)
+    hedge_atr = config.get("mor_hedge_giris_atr", 0.5)
 
     if side == "short":
         lose_exit = entry_price + le_atr * atr
@@ -133,6 +55,8 @@ def create_yellow_table(entry_price, bb_middle, config, side="short"):
     zone_total = abs(entry_price - winrate) if side == "short" else abs(winrate - entry_price)
     zone_step = zone_total / 5.0
 
+    hedge_entry = (entry_price + lose_exit) / 2
+
     if side == "short":
         ls_zones = {
             "ls_zone4_entry": lose_exit - 1 * ls_step,
@@ -145,7 +69,6 @@ def create_yellow_table(entry_price, bb_middle, config, side="short"):
             "zone4_entry": entry_price - 3 * zone_step,
             "zone5_entry": entry_price - 4 * zone_step,
         }
-        hedge_entry = ls_zones["ls_zone2_entry"]
     else:
         ls_zones = {
             "ls_zone4_entry": lose_exit + 1 * ls_step,
@@ -158,7 +81,6 @@ def create_yellow_table(entry_price, bb_middle, config, side="short"):
             "zone4_entry": entry_price + 3 * zone_step,
             "zone5_entry": entry_price + 4 * zone_step,
         }
-        hedge_entry = ls_zones["ls_zone2_entry"]
 
     chandelier_dist = distance * config.get("chandelier_mesafe_carpani", 1)
 
@@ -174,6 +96,49 @@ def create_yellow_table(entry_price, bb_middle, config, side="short"):
     table.update(ls_zones)
     table.update(alt_zones)
     return table
+
+
+def create_red_table(entry_price, lose_exit_price, side, config):
+    if side == "short":
+        distance = lose_exit_price - entry_price
+        winrate = entry_price - distance * config.get("winrate_mesafe_carpani", 2.5)
+    else:
+        distance = entry_price - lose_exit_price
+        winrate = entry_price + distance * config.get("winrate_mesafe_carpani", 2.5)
+
+    return {
+        "side": side,
+        "entry": entry_price,
+        "lose_exit": lose_exit_price,
+        "winrate": winrate,
+        "distance": distance,
+        "chandelier_distance": distance,
+    }
+
+
+def create_gold_table(entry_price, side, config):
+    le_pct = config.get("lose_exit_yuzde", 0.02)
+    wr_pct = config.get("winrate_yuzde", 0.05)
+
+    if side == "short":
+        lose_exit = entry_price * (1 + le_pct)
+        winrate = entry_price * (1 - wr_pct)
+    else:
+        lose_exit = entry_price * (1 - le_pct)
+        winrate = entry_price * (1 + wr_pct)
+
+    distance = entry_price * le_pct
+    hedge_entry = (entry_price + lose_exit) / 2
+
+    return {
+        "side": side,
+        "entry": entry_price,
+        "lose_exit": lose_exit,
+        "winrate": winrate,
+        "hedge_entry": hedge_entry,
+        "distance": distance,
+        "chandelier_distance": distance,
+    }
 
 
 def create_black_table(entry_price, dc_upper, config, side="short"):
@@ -201,6 +166,8 @@ def create_black_table(entry_price, dc_upper, config, side="short"):
     zone_total = abs(entry_price - winrate) if side == "short" else abs(winrate - entry_price)
     zone_step = zone_total / 5.0
 
+    hedge_entry = (entry_price + lose_exit) / 2
+
     if side == "short":
         ls_zones = {
             "ls_zone4_entry": lose_exit - 1 * ls_step,
@@ -213,7 +180,6 @@ def create_black_table(entry_price, dc_upper, config, side="short"):
             "zone4_entry": entry_price - 3 * zone_step,
             "zone5_entry": entry_price - 4 * zone_step,
         }
-        hedge_entry = ls_zones["ls_zone2_entry"]
     else:
         ls_zones = {
             "ls_zone4_entry": lose_exit + 1 * ls_step,
@@ -226,7 +192,6 @@ def create_black_table(entry_price, dc_upper, config, side="short"):
             "zone4_entry": entry_price + 3 * zone_step,
             "zone5_entry": entry_price + 4 * zone_step,
         }
-        hedge_entry = ls_zones["ls_zone2_entry"]
 
     chandelier_dist = distance * config.get("chandelier_mesafe_carpani", 1)
 

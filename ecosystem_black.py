@@ -9,9 +9,12 @@ log = get_logger("ecosystem_black")
 class BlackEcosystem(EcosystemBase):
     def __init__(self, config, data_pool, trade_executor, telegram_bot=None):
         super().__init__("siyah", config, data_pool, trade_executor, telegram_bot)
+        self.max_trades = config.get("max_siyah_islem", 10)
+        self.max_hedge_trades = config.get("max_gri_islem", 10)
         self.prev_dc_lower = {}
         self.prev_dc_upper = {}
         self._last_scan = {}
+        self._prev_prices = {}
 
     def on_candle_close(self, symbol, candle):
         if not self.active:
@@ -23,9 +26,9 @@ class BlackEcosystem(EcosystemBase):
 
         dc_upper = ind.get("dc_upper", [])
         dc_lower = ind.get("dc_lower", [])
-        ema48 = ind.get("ema48", [])
+        ema_main = ind.get("ema_main", [])
 
-        if not dc_upper or not dc_lower or not ema48:
+        if not dc_upper or not dc_lower or not ema_main:
             return
         if len(dc_lower) < 2 or len(dc_upper) < 2:
             return
@@ -34,7 +37,7 @@ class BlackEcosystem(EcosystemBase):
         prev_dc_lower = dc_lower[-2]
         current_dc_upper = dc_upper[-1]
         prev_dc_upper = dc_upper[-2]
-        current_ema = ema48[-1]
+        current_ema = ema_main[-1]
         current_price = candle["close"]
         candle_low = candle["low"]
         candle_high = candle["high"]
@@ -96,6 +99,7 @@ class BlackEcosystem(EcosystemBase):
                 sl_price=trade_info["sl_price"],
                 order_id=trade_info["order_id"]
             )
+            trade.chandelier_active = False
             self.add_trade(trade)
 
             if self.telegram:
@@ -106,10 +110,12 @@ class BlackEcosystem(EcosystemBase):
     def on_tick(self, symbol, price):
         if not self.active:
             return
-        self._check_hedge_entries(symbol, price)
+        prev_price = self._prev_prices.get(symbol)
+        self._prev_prices[symbol] = price
+        self._check_hedge_entries(symbol, price, prev_price)
         self._check_exits_tick(symbol, price)
 
-    def _check_hedge_entries(self, symbol, price):
+    def _check_hedge_entries(self, symbol, price, prev_price=None):
         with self._lock:
             main_trades = [t for t in self.trades if t.symbol == symbol]
 
@@ -120,28 +126,29 @@ class BlackEcosystem(EcosystemBase):
 
             flag_key = f"gri_hedge_{id(main_trade)}"
 
+            if prev_price is None:
+                continue
+
             if hedge_side == "long":
-                if price > entry_line:
+                if prev_price <= entry_line and price > entry_line:
                     if not self.has_flag(symbol, flag_key):
                         self.set_flag(symbol, flag_key, True)
-                elif price < entry_line:
+                if price < entry_line:
                     self.clear_flag(symbol, flag_key)
-
-                if price > hedge_line and self.has_flag(symbol, flag_key):
+                if prev_price <= hedge_line and price > hedge_line and self.has_flag(symbol, flag_key):
                     existing = self.find_hedge_trades_for_parent(main_trade)
-                    if not existing:
+                    if not existing and self.can_open_hedge():
                         self._open_hedge(main_trade, symbol, price, hedge_side)
                         self.clear_flag(symbol, flag_key)
             else:
-                if price < entry_line:
+                if prev_price >= entry_line and price < entry_line:
                     if not self.has_flag(symbol, flag_key):
                         self.set_flag(symbol, flag_key, True)
-                elif price > entry_line:
+                if price > entry_line:
                     self.clear_flag(symbol, flag_key)
-
-                if price < hedge_line and self.has_flag(symbol, flag_key):
+                if prev_price >= hedge_line and price < hedge_line and self.has_flag(symbol, flag_key):
                     existing = self.find_hedge_trades_for_parent(main_trade)
-                    if not existing:
+                    if not existing and self.can_open_hedge():
                         self._open_hedge(main_trade, symbol, price, hedge_side)
                         self.clear_flag(symbol, flag_key)
 
@@ -178,6 +185,32 @@ class BlackEcosystem(EcosystemBase):
 
             log.info("GRI %s acildi: %s @ %.4f", side.upper(), symbol, price)
 
+    def _activate_chandelier_if_ready(self, trade, price):
+        if trade.chandelier_active:
+            return
+        distance = trade.table.get("distance", 0)
+        entry = trade.table.get("entry", trade.entry_price)
+        if distance <= 0:
+            return
+        if trade.side == "short" and price <= entry - distance:
+            trade.chandelier_active = True
+            trade.chandelier_extreme = price
+            if self.telegram:
+                chandelier_level = price + trade.table.get("chandelier_distance", distance)
+                self.telegram.send_chandelier_activated(
+                    trade.symbol, trade.ecosystem, trade.side,
+                    trade.entry_price, price, chandelier_level
+                )
+        elif trade.side == "long" and price >= entry + distance:
+            trade.chandelier_active = True
+            trade.chandelier_extreme = price
+            if self.telegram:
+                chandelier_level = price - trade.table.get("chandelier_distance", distance)
+                self.telegram.send_chandelier_activated(
+                    trade.symbol, trade.ecosystem, trade.side,
+                    trade.entry_price, price, chandelier_level
+                )
+
     def _check_exits_candle(self, symbol, price):
         self._check_exits_tick(symbol, price)
 
@@ -187,6 +220,7 @@ class BlackEcosystem(EcosystemBase):
             for trade in list(self.trades):
                 if trade.symbol != symbol:
                     continue
+                self._activate_chandelier_if_ready(trade, price)
                 if self.check_winrate(trade, price):
                     trades_to_close.append((trade, "Winrate"))
                 elif self.check_lose_exit(trade, price):

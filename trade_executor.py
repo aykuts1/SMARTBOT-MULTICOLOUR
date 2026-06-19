@@ -39,6 +39,13 @@ class TradeExecutor:
             log.error("%s: Fiyat alinamadi", symbol)
             return None
 
+        if not self.client.instrument_info.get(symbol):
+            log.warning("%s: Instrument bilgisi eksik, yeniden yukleniyor...", symbol)
+            self.client.load_instrument_info([symbol])
+            if not self.client.instrument_info.get(symbol):
+                log.error("%s %s: Instrument bilgisi yuklenemedi, islem atlanıyor", symbol, ecosystem)
+                return None
+
         min_qty = self.client.get_min_qty(symbol)
         qty_step = self.client.get_qty_step(symbol)
 

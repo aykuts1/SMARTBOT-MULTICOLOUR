@@ -10,6 +10,8 @@ log = get_logger("ecosystem_white")
 class WhiteEcosystem(EcosystemBase):
     def __init__(self, config, data_pool, trade_executor, telegram_bot=None):
         super().__init__("beyaz", config, data_pool, trade_executor, telegram_bot)
+        self.max_trades = config.get("max_beyaz_islem", 10)
+        self.max_hedge_trades = config.get("max_mor_islem", 10)
         self.pending_signals = {}
         self._last_scan = {}
 
@@ -25,20 +27,20 @@ class WhiteEcosystem(EcosystemBase):
         stoch_d = ind.get("stoch_d", [])
         macd = ind.get("macd", [])
         macd_sig = ind.get("macd_signal", [])
-        ema48 = ind.get("ema48", [])
-        atr48 = ind.get("atr48", [])
+        ema_main = ind.get("ema_main", [])
+        atr_main = ind.get("atr_main", [])
 
         if not stoch_k or not stoch_d or not macd or not macd_sig:
             return
-        if not ema48 or not atr48:
+        if not ema_main or not atr_main:
             return
 
         idx = len(stoch_k) - 1
         if idx < 1:
             return
 
-        current_ema = ema48[-1]
-        current_atr = atr48[-1]
+        current_ema = ema_main[-1]
+        current_atr = atr_main[-1]
         current_price = candle["close"]
 
         if current_ema <= 0 or current_atr <= 0:
@@ -77,7 +79,7 @@ class WhiteEcosystem(EcosystemBase):
             if side == "long" and price <= ema:
                 return
 
-            if self.can_open_trade() and not self.has_trade_for_symbol(symbol, side):
+            if self.can_open_trade():
                 self._open_trade(symbol, price, atr, side)
             return
 
@@ -112,7 +114,7 @@ class WhiteEcosystem(EcosystemBase):
                     return
 
                 del self.pending_signals[key]
-                if self.can_open_trade() and not self.has_trade_for_symbol(symbol, side):
+                if self.can_open_trade():
                     self._open_trade(symbol, price, atr, side)
 
     def _age_pending_signals(self, symbol):
@@ -147,6 +149,7 @@ class WhiteEcosystem(EcosystemBase):
                 sl_price=trade_info["sl_price"],
                 order_id=trade_info["order_id"]
             )
+            trade.chandelier_active = False
             self.add_trade(trade)
 
             if self.telegram:
@@ -180,7 +183,7 @@ class WhiteEcosystem(EcosystemBase):
 
                 if price > hedge_line and self.has_flag(symbol, flag_key):
                     existing = self.find_hedge_trades_for_parent(main_trade)
-                    if not existing:
+                    if not existing and self.can_open_hedge():
                         self._open_hedge(main_trade, symbol, price, hedge_side)
                         self.clear_flag(symbol, flag_key)
             else:
@@ -192,7 +195,7 @@ class WhiteEcosystem(EcosystemBase):
 
                 if price < hedge_line and self.has_flag(symbol, flag_key):
                     existing = self.find_hedge_trades_for_parent(main_trade)
-                    if not existing:
+                    if not existing and self.can_open_hedge():
                         self._open_hedge(main_trade, symbol, price, hedge_side)
                         self.clear_flag(symbol, flag_key)
 
@@ -232,12 +235,41 @@ class WhiteEcosystem(EcosystemBase):
     def _check_exits_candle(self, symbol, price):
         self._check_exits_tick(symbol, price)
 
+    def _activate_chandelier_if_ready(self, trade, price):
+        if trade.chandelier_active:
+            return
+        atr = trade.table.get("atr", 0)
+        entry = trade.table.get("entry", trade.entry_price)
+        if atr <= 0:
+            return
+        activated = False
+        if trade.side == "short" and price <= entry - atr:
+            trade.chandelier_active = True
+            trade.chandelier_extreme = price
+            activated = True
+        elif trade.side == "long" and price >= entry + atr:
+            trade.chandelier_active = True
+            trade.chandelier_extreme = price
+            activated = True
+
+        if activated and self.telegram:
+            chandelier_dist = trade.table.get("chandelier_distance", 0)
+            if trade.side == "short":
+                chandelier_level = price + chandelier_dist
+            else:
+                chandelier_level = price - chandelier_dist
+            self.telegram.send_chandelier_activated(
+                trade.symbol, trade.ecosystem, trade.side,
+                trade.entry_price, price, chandelier_level
+            )
+
     def _check_exits_tick(self, symbol, price):
         trades_to_close = []
         with self._lock:
             for trade in list(self.trades):
                 if trade.symbol != symbol:
                     continue
+                self._activate_chandelier_if_ready(trade, price)
                 if self.check_winrate(trade, price):
                     trades_to_close.append((trade, "Winrate"))
                 elif self.check_lose_exit(trade, price):

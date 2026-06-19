@@ -72,6 +72,20 @@ def qty_round_down(qty, step_size):
     return float(steps * d_step)
 
 
+def qty_to_str(qty, qty_step):
+    """Bybit API için qty'yi doğru ondalık basamakta string'e çevirir."""
+    d_step = Decimal(str(qty_step))
+    d_qty = Decimal(str(qty))
+    return str(d_qty.quantize(d_step))
+
+
+def price_to_str(price, tick_size):
+    """Bybit API için fiyatı doğru ondalık basamakta string'e çevirir."""
+    d_tick = Decimal(str(tick_size))
+    d_price = Decimal(str(price))
+    return str(d_price.quantize(d_tick))
+
+
 def sl_round(entry_price, sl_price, tick_size, side):
     if side == "short":
         return tick_round(sl_price, tick_size, "up")
@@ -124,11 +138,11 @@ def parse_order_link_id(order_link_id):
 
 def is_our_order(order_link_id):
     valid_prefixes = [
-        "KIRMIZI", "MAVI",
         "BEYAZ", "MOR",
         "SARI", "TURUNCU",
         "SIYAH", "GRI",
-        "GOLD", "SILVER"
+        "ALTIN", "GUMUS",
+        "KIRMIZI", "MAVI"
     ]
     if not order_link_id:
         return False
@@ -138,22 +152,22 @@ def is_our_order(order_link_id):
 
 def ecosystem_emoji(name):
     emojis = {
-        "kirmizi": "🔴", "mavi": "🔵",
         "beyaz": "⬜", "mor": "🟣",
         "sari": "🟡", "turuncu": "🟠",
         "siyah": "⬛", "gri": "🔘",
-        "gold": "🥇", "silver": "🥈"
+        "altin": "🟨", "gumus": "🩶",
+        "kirmizi": "🟥", "mavi": "🟦"
     }
     return emojis.get(name.lower(), "⚪")
 
 
 def ecosystem_display_name(name):
     names = {
-        "kirmizi": "Kırmızı", "mavi": "Mavi",
         "beyaz": "Beyaz", "mor": "Mor",
         "sari": "Sarı", "turuncu": "Turuncu",
         "siyah": "Siyah", "gri": "Gri",
-        "gold": "Gold", "silver": "Silver"
+        "altin": "Altın", "gumus": "Gümüş",
+        "kirmizi": "Kırmızı", "mavi": "Mavi"
     }
     return names.get(name.lower(), name)
 

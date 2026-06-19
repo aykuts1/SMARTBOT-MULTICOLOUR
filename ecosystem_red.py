@@ -1,197 +1,40 @@
-import time
-from ecosystem_base import EcosystemBase, Trade, HedgeTrade
+from ecosystem_base import EcosystemBase, Trade
 from trade_table import create_red_table
 from logger_setup import get_logger
 
 log = get_logger("ecosystem_red")
 
 
-class ScaleTrade(Trade):
-    def __init__(self, parent_trade, **kwargs):
-        super().__init__(**kwargs)
-        self.parent_trade = parent_trade
-
-
 class RedEcosystem(EcosystemBase):
     def __init__(self, config, data_pool, trade_executor, telegram_bot=None):
         super().__init__("kirmizi", config, data_pool, trade_executor, telegram_bot)
+        self.max_kirmizi = config.get("max_kirmizi_islem", 10)
+        self.max_mavi = config.get("max_mavi_islem", 10)
         self._prev_prices = {}
-        self._scale_trades = []
 
-    def get_trade_count(self):
+    def _count_kirmizi(self):
         with self._lock:
-            return len(self.trades) + len(self._scale_trades)
+            return sum(1 for t in self.trades if t.ecosystem == "kirmizi")
 
-    def get_all_trades(self):
+    def _count_mavi(self):
         with self._lock:
-            return list(self.trades) + list(self._scale_trades) + list(self.hedge_trades)
+            return sum(1 for t in self.trades if t.ecosystem == "mavi")
 
-    def _get_band_levels(self, symbol):
-        ind = self.data_pool.get_indicators(symbol)
-        ema48 = ind.get("ema48", [])
-        atr48 = ind.get("atr48", [])
-        if not ema48 or not atr48:
-            return None
-        ema = ema48[-1]
-        atr = atr48[-1]
-        if ema <= 0 or atr <= 0:
-            return None
-        return {"ema": ema, "atr": atr}
+    def can_open_kirmizi(self):
+        return self.active and self._count_kirmizi() < self.max_kirmizi
 
-    def on_tick(self, symbol, price):
-        if not self.active:
-            return
+    def can_open_mavi(self):
+        return self.active and self._count_mavi() < self.max_mavi
 
-        prev_price = self._prev_prices.get(symbol)
-        self._prev_prices[symbol] = price
-
-        if prev_price is not None:
-            self._check_entries(symbol, price, prev_price)
-
-        self._check_hedge_entries(symbol, price)
-        self._check_all_exits(symbol, price)
-
-    def _check_entries(self, symbol, price, prev_price):
-        band = self._get_band_levels(symbol)
-        if not band:
-            return
-
-        ema = band["ema"]
-        atr = band["atr"]
-        cfg = self.config
-
-        flag_atr = cfg.get("flag_giris_atr", 1)
-        entry_atr = cfg.get("islem_giris_atr", 2)
-
-        short_alt1 = ema - flag_atr * atr
-        short_alt2 = ema - entry_atr * atr
-        long_ust1 = ema + flag_atr * atr
-        long_ust2 = ema + entry_atr * atr
-
-        # --- SHORT ---
-        if prev_price > short_alt1 and price < short_alt1:
-            if not self.has_flag(symbol, "short_block"):
-                self.set_flag(symbol, "short", True)
-                log.debug("KIRMIZI short bayrak acildi: %s", symbol)
-
-        if prev_price < short_alt1 and price > short_alt1:
-            self.clear_flag(symbol, "short")
-            self.clear_flag(symbol, "short_block")
-
-        if (prev_price > short_alt2 and price < short_alt2
-                and self.has_flag(symbol, "short")
-                and not self.has_flag(symbol, "short_block")):
-            if self.can_open_trade() and not self.has_trade_for_symbol(symbol, "short"):
-                self.set_flag(symbol, "short_block", True)
-                self.clear_flag(symbol, "short")
-                self._open_main_trade(symbol, price, ema, atr, "short")
-
-        # --- LONG ---
-        if prev_price < long_ust1 and price > long_ust1:
-            if not self.has_flag(symbol, "long_block"):
-                self.set_flag(symbol, "long", True)
-                log.debug("KIRMIZI long bayrak acildi: %s", symbol)
-
-        if prev_price > long_ust1 and price < long_ust1:
-            self.clear_flag(symbol, "long")
-            self.clear_flag(symbol, "long_block")
-
-        if (prev_price < long_ust2 and price > long_ust2
-                and self.has_flag(symbol, "long")
-                and not self.has_flag(symbol, "long_block")):
-            if self.can_open_trade() and not self.has_trade_for_symbol(symbol, "long"):
-                self.set_flag(symbol, "long_block", True)
-                self.clear_flag(symbol, "long")
-                self._open_main_trade(symbol, price, ema, atr, "long")
-
-        # --- Scale girişleri ---
-        self._check_scale_entries(symbol, price, prev_price)
-
-    def _check_scale_entries(self, symbol, price, prev_price):
+    def _has_trade_eco(self, symbol, ecosystem):
         with self._lock:
-            main_trades = [t for t in self.trades if t.symbol == symbol]
+            return any(t.symbol == symbol and t.ecosystem == ecosystem for t in self.trades)
 
-        for main_trade in main_trades:
-            side = main_trade.side
-            zone3 = main_trade.table.get("zone3_entry", 0)
-            zone5 = main_trade.table.get("zone5_entry", 0)
+    def on_candle_close(self, symbol, candle):
+        pass
 
-            flag_z3 = f"scale_z3_{id(main_trade)}"
-            flag_z5 = f"scale_z5_{id(main_trade)}"
-
-            if side == "short":
-                # Zone3 crossover aşağı
-                if zone3 > 0 and prev_price > zone3 and price < zone3:
-                    if not self.has_flag(symbol, flag_z3):
-                        self.set_flag(symbol, flag_z3, True)
-                        self._open_scale_trade(main_trade, symbol, price, side)
-
-                # Zone5 crossover aşağı
-                if zone5 > 0 and prev_price > zone5 and price < zone5:
-                    if not self.has_flag(symbol, flag_z5):
-                        self.set_flag(symbol, flag_z5, True)
-                        self._open_scale_trade(main_trade, symbol, price, side)
-            else:
-                # Zone3 crossover yukarı
-                if zone3 > 0 and prev_price < zone3 and price > zone3:
-                    if not self.has_flag(symbol, flag_z3):
-                        self.set_flag(symbol, flag_z3, True)
-                        self._open_scale_trade(main_trade, symbol, price, side)
-
-                # Zone5 crossover yukarı
-                if zone5 > 0 and prev_price < zone5 and price > zone5:
-                    if not self.has_flag(symbol, flag_z5):
-                        self.set_flag(symbol, flag_z5, True)
-                        self._open_scale_trade(main_trade, symbol, price, side)
-
-    def _open_scale_trade(self, parent_trade, symbol, price, side):
-        trade_info = self.executor.open_trade(
-            symbol=symbol, side=side,
-            ecosystem="KIRMIZI", entry_price=price,
-            fixed_qty=parent_trade.qty
-        )
-
-        if trade_info:
-            atr = parent_trade.table.get("atr", 0)
-            if side == "short":
-                winrate = price - 2.5 * atr
-                lose_exit = price + 1.0 * atr
-            else:
-                winrate = price + 2.5 * atr
-                lose_exit = price - 1.0 * atr
-
-            table = {
-                "side": side,
-                "entry": price,
-                "lose_exit": lose_exit,
-                "winrate": winrate,
-                "atr": atr,
-            }
-
-            scale = ScaleTrade(
-                parent_trade=parent_trade,
-                symbol=symbol, side=side, ecosystem="kirmizi",
-                entry_price=price, qty=trade_info["qty"], table=table,
-                order_link_id=trade_info["order_link_id"],
-                open_time=trade_info["open_time"],
-                margin=trade_info["margin"],
-                commission=trade_info["commission"],
-                leverage=trade_info["leverage"],
-                sl_price=trade_info["sl_price"],
-                order_id=trade_info["order_id"]
-            )
-
-            with self._lock:
-                self._scale_trades.append(scale)
-
-            if self.telegram:
-                self.telegram.send_trade_opened(trade_info, table)
-
-            log.info("KIRMIZI SCALE %s acildi: %s @ %.4f (qty: %.6f)",
-                     side.upper(), symbol, price, parent_trade.qty)
-
-    def _open_main_trade(self, symbol, price, ema, atr, side):
-        table = create_red_table(price, ema, atr, side)
+    def _open_kirmizi(self, symbol, price, lose_exit_price, side):
+        table = create_red_table(price, lose_exit_price, side, self.config)
 
         trade_info = self.executor.open_trade(
             symbol=symbol, side=side,
@@ -210,6 +53,7 @@ class RedEcosystem(EcosystemBase):
                 sl_price=trade_info["sl_price"],
                 order_id=trade_info["order_id"]
             )
+            trade.chandelier_active = False
             self.add_trade(trade)
 
             if self.telegram:
@@ -217,61 +61,128 @@ class RedEcosystem(EcosystemBase):
 
             log.info("KIRMIZI %s acildi: %s @ %.4f", side.upper(), symbol, price)
 
-    def _check_hedge_entries(self, symbol, price):
-        with self._lock:
-            main_trades = list(self.trades)
+    def on_tick(self, symbol, price):
+        if not self.active:
+            return
+        prev_price = self._prev_prices.get(symbol)
+        self._prev_prices[symbol] = price
+        self._check_kirmizi_flags(symbol, price, prev_price)
+        self._check_mavi_flags(symbol, price, prev_price)
+        self._check_kirmizi_exits_tick(symbol, price)
+        self._check_mavi_exits_tick(symbol, price, prev_price)
 
-        for main_trade in main_trades:
-            if main_trade.symbol != symbol:
-                continue
+    def _check_kirmizi_flags(self, symbol, price, prev_price):
+        if prev_price is None:
+            return
 
-            hedge_side = "long" if main_trade.side == "short" else "short"
-            entry_line = main_trade.table.get("entry", 0)
-            hedge_line = main_trade.table.get("hedge_entry", 0)
+        ind = self.data_pool.get_indicators(symbol)
+        if not ind:
+            return
 
-            flag_key = f"hedge_{id(main_trade)}"
+        kc_middle = ind.get("kc_red_middle", [])
+        kc_upper = ind.get("kc_red_upper", [])
+        kc_lower = ind.get("kc_red_lower", [])
 
-            if hedge_side == "long":
-                if price > entry_line:
-                    if not self.has_flag(symbol, flag_key):
-                        self.set_flag(symbol, flag_key, True)
-                elif price < entry_line:
-                    self.clear_flag(symbol, flag_key)
+        if not kc_middle or not kc_upper or not kc_lower:
+            return
 
-                if price > hedge_line and self.has_flag(symbol, flag_key):
-                    existing = self.find_hedge_trades_for_parent(main_trade)
-                    if not existing:
-                        self._open_hedge(main_trade, symbol, price, hedge_side)
-                        self.clear_flag(symbol, flag_key)
-            else:
-                if price < entry_line:
-                    if not self.has_flag(symbol, flag_key):
-                        self.set_flag(symbol, flag_key, True)
-                elif price > entry_line:
-                    self.clear_flag(symbol, flag_key)
+        current_ema = kc_middle[-1]
+        current_kc_upper = kc_upper[-1]
+        current_kc_lower = kc_lower[-1]
 
-                if price < hedge_line and self.has_flag(symbol, flag_key):
-                    existing = self.find_hedge_trades_for_parent(main_trade)
-                    if not existing:
-                        self._open_hedge(main_trade, symbol, price, hedge_side)
-                        self.clear_flag(symbol, flag_key)
+        if current_ema <= 0:
+            return
 
-    def _open_hedge(self, parent_trade, symbol, price, side):
+        # EMA cross aşağı → short flag aç, long flag sil
+        if prev_price >= current_ema and price < current_ema:
+            if not self.has_flag(symbol, "kirmizi_short_ema"):
+                self.set_flag(symbol, "kirmizi_short_ema", True)
+            self.clear_flag(symbol, "kirmizi_long_ema")
+
+        # EMA cross yukarı → long flag aç, short flag sil
+        if prev_price <= current_ema and price > current_ema:
+            if not self.has_flag(symbol, "kirmizi_long_ema"):
+                self.set_flag(symbol, "kirmizi_long_ema", True)
+            self.clear_flag(symbol, "kirmizi_short_ema")
+
+        # SHORT: alt bandı aşağı kes + flag → işlem aç
+        if (prev_price >= current_kc_lower and price < current_kc_lower
+                and self.has_flag(symbol, "kirmizi_short_ema")):
+            if self.can_open_kirmizi() and not self._has_trade_eco(symbol, "kirmizi"):
+                self._open_kirmizi(symbol, price, current_kc_upper, "short")
+                self.clear_flag(symbol, "kirmizi_short_ema")
+
+        # LONG: üst bandı yukarı kes + flag → işlem aç
+        if (prev_price <= current_kc_upper and price > current_kc_upper
+                and self.has_flag(symbol, "kirmizi_long_ema")):
+            if self.can_open_kirmizi() and not self._has_trade_eco(symbol, "kirmizi"):
+                self._open_kirmizi(symbol, price, current_kc_lower, "long")
+                self.clear_flag(symbol, "kirmizi_long_ema")
+
+    def _check_mavi_flags(self, symbol, price, prev_price):
+        if prev_price is None:
+            return
+
+        ind = self.data_pool.get_indicators(symbol)
+        if not ind:
+            return
+
+        kc_upper = ind.get("kc_red_upper", [])
+        kc_lower = ind.get("kc_red_lower", [])
+        kc_outer_upper = ind.get("kc_red_outer_upper", [])
+        kc_outer_lower = ind.get("kc_red_outer_lower", [])
+
+        if not kc_upper or not kc_outer_upper:
+            return
+
+        cur_upper = kc_upper[-1]
+        cur_lower = kc_lower[-1]
+        cur_outer_upper = kc_outer_upper[-1]
+        cur_outer_lower = kc_outer_lower[-1]
+
+        # --- MAVI SHORT ---
+        # Dış üst bandı aşağı keserse → flag aç
+        if prev_price >= cur_outer_upper and price < cur_outer_upper:
+            if not self.has_flag(symbol, "mavi_short"):
+                self.set_flag(symbol, "mavi_short", True)
+        # Dış üst bandı yukarı keserse → flag sil
+        if prev_price <= cur_outer_upper and price > cur_outer_upper:
+            self.clear_flag(symbol, "mavi_short")
+        # Üst bandı aşağı keserse + flag → işlem aç
+        if (prev_price >= cur_upper and price < cur_upper
+                and self.has_flag(symbol, "mavi_short")):
+            if self.can_open_mavi() and not self._has_trade_eco(symbol, "mavi"):
+                self._open_mavi(symbol, price, "short")
+                self.clear_flag(symbol, "mavi_short")
+
+        # --- MAVI LONG ---
+        # Dış alt bandı yukarı keserse → flag aç
+        if prev_price <= cur_outer_lower and price > cur_outer_lower:
+            if not self.has_flag(symbol, "mavi_long"):
+                self.set_flag(symbol, "mavi_long", True)
+        # Dış alt bandı aşağı keserse → flag sil
+        if prev_price >= cur_outer_lower and price < cur_outer_lower:
+            self.clear_flag(symbol, "mavi_long")
+        # Alt bandı yukarı keserse + flag → işlem aç
+        if (prev_price <= cur_lower and price > cur_lower
+                and self.has_flag(symbol, "mavi_long")):
+            if self.can_open_mavi() and not self._has_trade_eco(symbol, "mavi"):
+                self._open_mavi(symbol, price, "long")
+                self.clear_flag(symbol, "mavi_long")
+
+    def _open_mavi(self, symbol, price, side):
+        table = {
+            "side": side,
+            "entry": price,
+        }
+
         trade_info = self.executor.open_trade(
             symbol=symbol, side=side,
             ecosystem="MAVI", entry_price=price
         )
 
         if trade_info:
-            table = {
-                "side": side,
-                "entry": parent_trade.table.get("entry", price),
-                "lose_exit": parent_trade.table.get("lose_exit", 0),
-                "hedge_entry": parent_trade.table.get("hedge_entry", 0),
-            }
-
-            hedge = HedgeTrade(
-                parent_trade=parent_trade,
+            trade = Trade(
                 symbol=symbol, side=side, ecosystem="mavi",
                 entry_price=price, qty=trade_info["qty"], table=table,
                 order_link_id=trade_info["order_link_id"],
@@ -282,90 +193,100 @@ class RedEcosystem(EcosystemBase):
                 sl_price=trade_info["sl_price"],
                 order_id=trade_info["order_id"]
             )
-            self.add_hedge_trade(hedge)
+            trade.chandelier_active = False
+            self.add_trade(trade)
 
             if self.telegram:
                 self.telegram.send_trade_opened(trade_info, table)
 
             log.info("MAVI %s acildi: %s @ %.4f", side.upper(), symbol, price)
 
-    def _check_all_exits(self, symbol, price):
-        trades_to_close = []
+    def _activate_chandelier_if_ready(self, trade, price):
+        if trade.chandelier_active:
+            return
+        distance = trade.table.get("distance", 0)
+        entry = trade.table.get("entry", trade.entry_price)
+        if distance <= 0:
+            return
+        if trade.side == "short" and price <= entry - distance:
+            trade.chandelier_active = True
+            trade.chandelier_extreme = price
+            if self.telegram:
+                chandelier_level = price + trade.table.get("chandelier_distance", distance)
+                self.telegram.send_chandelier_activated(
+                    trade.symbol, trade.ecosystem, trade.side,
+                    trade.entry_price, price, chandelier_level
+                )
+        elif trade.side == "long" and price >= entry + distance:
+            trade.chandelier_active = True
+            trade.chandelier_extreme = price
+            if self.telegram:
+                chandelier_level = price - trade.table.get("chandelier_distance", distance)
+                self.telegram.send_chandelier_activated(
+                    trade.symbol, trade.ecosystem, trade.side,
+                    trade.entry_price, price, chandelier_level
+                )
 
+    def _check_kirmizi_exits_tick(self, symbol, price):
+        to_close = []
         with self._lock:
             for trade in list(self.trades):
-                if trade.symbol != symbol:
+                if trade.symbol != symbol or trade.ecosystem != "kirmizi":
                     continue
-                reason = self._check_exit_condition(trade, price)
-                if reason:
-                    trades_to_close.append((trade, reason))
+                self._activate_chandelier_if_ready(trade, price)
+                if self.check_winrate(trade, price):
+                    to_close.append((trade, "Winrate"))
+                elif self.check_lose_exit(trade, price):
+                    to_close.append((trade, "Lose Exit"))
+                elif self.update_chandelier(trade, price):
+                    to_close.append((trade, "Chandelier"))
 
-        for trade, reason in trades_to_close:
-            self._close_trade(trade, reason, price)
-            # Ana işlem CE veya Lose Exit ile kapandıysa scale trade'ler de kapanır
-            if reason in ("Lose Exit", "Chandelier"):
-                self._close_scales_for_parent(trade, reason, price)
+        for trade, reason in to_close:
+            close_info = self.executor.close_trade(trade, reason, price)
+            if close_info:
+                self.remove_trade(trade)
+                if self.telegram:
+                    self.telegram.send_trade_closed(close_info)
 
-        # Scale trade'lerin kendi winrate ve lose exit kontrolü
-        scale_to_close = []
+    def _check_mavi_exits_tick(self, symbol, price, prev_price):
+        ind = self.data_pool.get_indicators(symbol)
+        if not ind:
+            return
+
+        kc_upper = ind.get("kc_red_upper", [])
+        kc_lower = ind.get("kc_red_lower", [])
+        kc_outer_upper = ind.get("kc_red_outer_upper", [])
+        kc_outer_lower = ind.get("kc_red_outer_lower", [])
+
+        if not kc_upper or not kc_lower:
+            return
+
+        cur_upper = kc_upper[-1]
+        cur_lower = kc_lower[-1]
+        cur_outer_upper = kc_outer_upper[-1]
+        cur_outer_lower = kc_outer_lower[-1]
+
+        to_close = []
         with self._lock:
-            for scale in list(self._scale_trades):
-                if scale.symbol != symbol:
+            for trade in list(self.trades):
+                if trade.symbol != symbol or trade.ecosystem != "mavi":
                     continue
-                if self.check_winrate(scale, price):
-                    scale_to_close.append((scale, "Winrate"))
-                elif self.check_lose_exit(scale, price):
-                    scale_to_close.append((scale, "Lose Exit"))
+                if trade.side == "short":
+                    if price <= cur_lower:
+                        to_close.append((trade, "Alt Bant"))
+                    elif (prev_price is not None
+                          and prev_price <= cur_outer_upper and price > cur_outer_upper):
+                        to_close.append((trade, "Dis Ust Bant"))
+                else:
+                    if price >= cur_upper:
+                        to_close.append((trade, "Ust Bant"))
+                    elif (prev_price is not None
+                          and prev_price >= cur_outer_lower and price < cur_outer_lower):
+                        to_close.append((trade, "Dis Alt Bant"))
 
-        for scale, reason in scale_to_close:
-            self._close_scale_trade(scale, reason, price)
-
-        hedge_to_close = []
-        with self._lock:
-            for hedge in list(self.hedge_trades):
-                if hedge.symbol != symbol:
-                    continue
-                should_close, reason = self.check_hedge_exit(hedge, price)
-                if should_close:
-                    hedge_to_close.append((hedge, reason))
-
-        for hedge, reason in hedge_to_close:
-            self._close_hedge(hedge, reason, price)
-
-    def _check_exit_condition(self, trade, price):
-        if self.check_winrate(trade, price):
-            return "Winrate"
-        if self.check_lose_exit(trade, price):
-            return "Lose Exit"
-        if self.update_chandelier(trade, price):
-            return "Chandelier"
-        return None
-
-    def _close_trade(self, trade, reason, price):
-        close_info = self.executor.close_trade(trade, reason, price)
-        if close_info:
-            self.remove_trade(trade)
-            if self.telegram:
-                self.telegram.send_trade_closed(close_info)
-
-    def _close_scales_for_parent(self, parent_trade, reason, price):
-        with self._lock:
-            scales = [s for s in self._scale_trades if s.parent_trade is parent_trade]
-        for scale in scales:
-            self._close_scale_trade(scale, reason, price)
-
-    def _close_scale_trade(self, scale, reason, price):
-        close_info = self.executor.close_trade(scale, reason, price)
-        if close_info:
-            with self._lock:
-                if scale in self._scale_trades:
-                    self._scale_trades.remove(scale)
-            if self.telegram:
-                self.telegram.send_trade_closed(close_info)
-
-    def _close_hedge(self, hedge, reason, price):
-        close_info = self.executor.close_trade(hedge, reason, price)
-        if close_info:
-            self.remove_hedge_trade(hedge)
-            if self.telegram:
-                self.telegram.send_trade_closed(close_info)
+        for trade, reason in to_close:
+            close_info = self.executor.close_trade(trade, reason, price)
+            if close_info:
+                self.remove_trade(trade)
+                if self.telegram:
+                    self.telegram.send_trade_closed(close_info)

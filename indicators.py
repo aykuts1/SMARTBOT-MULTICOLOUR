@@ -109,6 +109,69 @@ def calc_bollinger(closes, period, std_dev):
     return upper, middle, lower
 
 
+def calc_keltner_with_outer(closes, highs, lows, ema_period, atr_period, multiplier, outer_multiplier):
+    n = len(closes)
+    ema = calc_ema(closes, ema_period)
+    atr = calc_atr(highs, lows, closes, atr_period)
+
+    upper = [0.0] * n
+    lower = [0.0] * n
+    outer_upper = [0.0] * n
+    outer_lower = [0.0] * n
+
+    for i in range(n):
+        if ema[i] > 0:
+            upper[i] = ema[i] + multiplier * atr[i]
+            lower[i] = ema[i] - multiplier * atr[i]
+            outer_upper[i] = ema[i] + outer_multiplier * atr[i]
+            outer_lower[i] = ema[i] - outer_multiplier * atr[i]
+
+    return upper, ema, lower, outer_upper, outer_lower
+
+
+def calc_kdj(highs, lows, closes, period=9, k_smooth=3, d_smooth=3):
+    n = len(closes)
+    k_vals = [0.0] * n
+    d_vals = [0.0] * n
+    j_vals = [0.0] * n
+
+    if n < period:
+        return k_vals, d_vals, j_vals
+
+    prev_k = 50.0
+    prev_d = 50.0
+
+    for i in range(period - 1, n):
+        high_max = max(highs[i - period + 1:i + 1])
+        low_min = min(lows[i - period + 1:i + 1])
+        rsv = (closes[i] - low_min) / (high_max - low_min) * 100.0 if high_max > low_min else 50.0
+        k = (prev_k * (k_smooth - 1) + rsv) / k_smooth
+        d = (prev_d * (d_smooth - 1) + k) / d_smooth
+        k_vals[i] = k
+        d_vals[i] = d
+        j_vals[i] = 3.0 * k - 2.0 * d
+        prev_k = k
+        prev_d = d
+
+    return k_vals, d_vals, j_vals
+
+
+def calc_keltner(closes, highs, lows, ema_period, atr_period, multiplier):
+    n = len(closes)
+    ema = calc_ema(closes, ema_period)
+    atr = calc_atr(highs, lows, closes, atr_period)
+
+    upper = [0.0] * n
+    lower = [0.0] * n
+
+    for i in range(n):
+        if ema[i] > 0:
+            upper[i] = ema[i] + multiplier * atr[i]
+            lower[i] = ema[i] - multiplier * atr[i]
+
+    return upper, ema, lower
+
+
 def calc_donchian(highs, lows, period):
     n = len(highs)
     if n < period:
@@ -146,15 +209,12 @@ def compute_all_indicators(candles, config):
 
     result = {}
 
-    ema48 = calc_ema(closes, 48)
-    atr48 = calc_atr(highs, lows, closes, 48)
-    result["ema48"] = ema48
-    result["atr48"] = atr48
-
-    ema21 = calc_ema(closes, 21)
-    atr21 = calc_atr(highs, lows, closes, 21)
-    result["ema21"] = ema21
-    result["atr21"] = atr21
+    ema_period = config.get("beyaz", {}).get("ema_periyodu", 48)
+    atr_period = config.get("beyaz", {}).get("atr_periyodu", 48)
+    ema_main = calc_ema(closes, ema_period)
+    atr_main = calc_atr(highs, lows, closes, atr_period)
+    result["ema_main"] = ema_main
+    result["atr_main"] = atr_main
 
     beyaz = config.get("beyaz", {})
     k_line, d_line = calc_stochastic(
@@ -193,6 +253,41 @@ def compute_all_indicators(candles, config):
     )
     result["dc_upper"] = dc_upper
     result["dc_lower"] = dc_lower
+
+    altin = config.get("altin", {})
+    kdj_k, kdj_d, kdj_j = calc_kdj(
+        highs, lows, closes,
+        altin.get("kdj_periyot", 9),
+        altin.get("kdj_k_smooth", 3),
+        altin.get("kdj_d_smooth", 3)
+    )
+    result["kdj_k"] = kdj_k
+    result["kdj_d"] = kdj_d
+    result["kdj_j"] = kdj_j
+
+    kc_upper, kc_middle, kc_lower = calc_keltner(
+        closes, highs, lows,
+        altin.get("keltner_ema_periyot", 200),
+        altin.get("keltner_atr_periyot", 200),
+        altin.get("keltner_carpan", 1.0)
+    )
+    result["kc_upper"] = kc_upper
+    result["kc_middle"] = kc_middle
+    result["kc_lower"] = kc_lower
+
+    kirmizi = config.get("kirmizi", {})
+    kc_red_upper, kc_red_middle, kc_red_lower, kc_red_outer_upper, kc_red_outer_lower = calc_keltner_with_outer(
+        closes, highs, lows,
+        kirmizi.get("keltner_ema_periyot", 48),
+        kirmizi.get("keltner_atr_periyot", 48),
+        kirmizi.get("keltner_carpan", 1.0),
+        kirmizi.get("keltner_dis_carpan", 1.5)
+    )
+    result["kc_red_upper"] = kc_red_upper
+    result["kc_red_middle"] = kc_red_middle
+    result["kc_red_lower"] = kc_red_lower
+    result["kc_red_outer_upper"] = kc_red_outer_upper
+    result["kc_red_outer_lower"] = kc_red_outer_lower
 
     result["closes"] = closes
     result["highs"] = highs

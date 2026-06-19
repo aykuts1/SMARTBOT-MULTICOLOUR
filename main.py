@@ -9,15 +9,15 @@ from datetime import datetime
 from logger_setup import setup_logger, get_logger
 from utils import load_config, get_config_mtime, format_usdt, format_duration, is_our_order
 from bybit_client import BybitClient
-from websocket_client import WebSocketClient
+from price_poller import PricePoller
 from data_pool import DataPool
 from indicators import compute_all_indicators
 from trade_executor import TradeExecutor
-from ecosystem_red import RedEcosystem
 from ecosystem_white import WhiteEcosystem
 from ecosystem_yellow import YellowEcosystem
 from ecosystem_black import BlackEcosystem
 from ecosystem_gold import GoldEcosystem
+from ecosystem_red import RedEcosystem
 from telegram_bot import TelegramBot
 
 setup_logger()
@@ -42,8 +42,8 @@ class BotManager:
         self.ecosystems = {}
         self._init_ecosystems()
 
-        # WebSocket
-        self.ws = None
+        # Price Poller
+        self.poller = None
 
         # Periyodik rapor zamanlayıcı
         self._report_thread = None
@@ -53,9 +53,6 @@ class BotManager:
 
     def _init_ecosystems(self):
         cfg = self.config
-        self.ecosystems["kirmizi"] = RedEcosystem(
-            cfg.get("kirmizi", {}), self.data_pool, self.executor, self.telegram
-        )
         self.ecosystems["beyaz"] = WhiteEcosystem(
             cfg.get("beyaz", {}), self.data_pool, self.executor, self.telegram
         )
@@ -65,8 +62,11 @@ class BotManager:
         self.ecosystems["siyah"] = BlackEcosystem(
             cfg.get("siyah", {}), self.data_pool, self.executor, self.telegram
         )
-        self.ecosystems["gold"] = GoldEcosystem(
-            cfg.get("gold", {}), self.data_pool, self.executor, self.telegram
+        self.ecosystems["altin"] = GoldEcosystem(
+            cfg.get("altin", {}), self.data_pool, self.executor, self.telegram
+        )
+        self.ecosystems["kirmizi"] = RedEcosystem(
+            cfg.get("kirmizi", {}), self.data_pool, self.executor, self.telegram
         )
 
     # === ANA BAŞLATMA ===
@@ -102,12 +102,15 @@ class BotManager:
         # 6. Mevcut pozisyonları kontrol et
         self._check_existing_positions()
 
-        # 7. WebSocket başlat
-        self.ws = WebSocketClient(
-            on_tick=self._on_tick,
+        # 7. Price Poller başlat
+        interval = self.config["global"]["timeframe"]
+        self.poller = PricePoller(
+            bybit_client=self.bybit,
+            data_pool=self.data_pool,
+            config=self.config,
             on_candle_close=self._on_candle_close
         )
-        self.ws.start(coins)
+        self.poller.start(coins, interval)
 
         # 8. Bot durumunu ayarla
         self.running = True
@@ -171,18 +174,23 @@ class BotManager:
 
         our_count = 0
         untagged_count = 0
+        untracked = []
         for pos in positions:
             link_id = pos.get("order_link_id", "")
             if is_our_order(link_id):
                 our_count += 1
                 log.info("Bizim pozisyon: %s %s %s (%.6f)",
                          pos["symbol"], pos["side"], link_id, pos["size"])
+                untracked.append(pos)
             else:
                 untagged_count += 1
                 log.warning("Etiketsiz pozisyon: %s %s (%.6f) - dokunulmayacak",
                             pos["symbol"], pos["side"], pos["size"])
 
         log.info("Pozisyon ozeti: %d bizim, %d etiketsiz", our_count, untagged_count)
+
+        if untracked and self.telegram:
+            self.telegram.send_untracked_positions(untracked)
 
     def _get_untagged_positions(self):
         positions = self.bybit.get_positions()
@@ -194,11 +202,6 @@ class BotManager:
         return untagged
 
     # === VERİ GERİ ÇAĞIRMALARI ===
-
-    def _on_tick(self, symbol, price):
-        if not self.running:
-            return
-        self.data_pool.update_price(symbol, price)
 
     def _on_candle_close(self, symbol, candle):
         if not self.running:
@@ -215,7 +218,7 @@ class BotManager:
         log.debug("%s mum kapandi: C=%.4f", symbol, candle["close"])
 
         # Mum kapanışına göre çalışan ekosistemler: Beyaz, Sarı, Siyah
-        for name in ["beyaz", "sari", "siyah"]:
+        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
             eco = self.ecosystems[name]
             if eco.active:
                 try:
@@ -264,17 +267,7 @@ class BotManager:
                 if not price or price <= 0:
                     continue
 
-                # Kırmızı ve Gold: giriş + çıkış + hedge
-                for name in ["kirmizi", "gold"]:
-                    eco = self.ecosystems[name]
-                    if eco.active:
-                        try:
-                            eco.on_tick(symbol, price)
-                        except Exception as e:
-                            log.error("%s scan hatasi (%s): %s", name, symbol, e)
-
-                # Beyaz, Sarı, Siyah: sadece çıkış + hedge
-                for name in ["beyaz", "sari", "siyah"]:
+                for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
                     eco = self.ecosystems[name]
                     if eco.active:
                         try:
@@ -316,32 +309,63 @@ class BotManager:
                 self.telegram.send_24h_report(balance, open_counts)
                 last_24h = now
 
+    def _sync_positions(self):
+        try:
+            bybit_positions = self.bybit.get_positions()
+            bybit_keys = set()
+            for p in bybit_positions:
+                idx = p.get("position_idx", 0)
+                bybit_keys.add((p["symbol"], idx))
+
+            to_remove = []
+            for eco in self.ecosystems.values():
+                for trade in eco.get_all_trades():
+                    pos_idx = 1 if trade.side == "long" else 2
+                    if (trade.symbol, pos_idx) not in bybit_keys:
+                        to_remove.append((eco, trade))
+
+            for eco, trade in to_remove:
+                log.warning("Dis kapanis tespit edildi: %s %s %s",
+                            trade.ecosystem, trade.symbol, trade.side)
+                if self.telegram:
+                    self.telegram.send_external_close(trade)
+                if hasattr(trade, "parent_trade"):
+                    eco.remove_hedge_trade(trade)
+                else:
+                    eco.remove_trade(trade)
+        except Exception as e:
+            log.error("Pozisyon sync hatasi: %s", e)
+
     def _health_loop(self):
-        was_connected = True
+        was_ok = True
+        lost_time = None
+        last_sync = time.time()
         while not self._stop_event.is_set():
-            self._stop_event.wait(10)
+            self._stop_event.wait(30)
             if self._stop_event.is_set():
                 break
 
-            if self.ws:
-                is_connected = self.ws.is_connected
+            if self.poller:
+                secs = self.poller.seconds_since_last_price
+                is_ok = 0 <= secs < 60
 
-                if was_connected and not is_connected:
-                    log.warning("WebSocket baglantisi kesildi")
+                if was_ok and not is_ok:
+                    lost_time = time.time()
+                    log.warning("Fiyat verisi kesildi (son: %.0f sn once)", secs)
                     self.telegram.send_connection_lost()
-                    self._add_event("WebSocket baglantisi kesildi")
+                    self._add_event("Fiyat verisi kesildi")
 
-                if not was_connected and is_connected:
-                    downtime = 0
-                    if self.ws.disconnect_time:
-                        downtime = time.time() - self.ws.disconnect_time
+                if not was_ok and is_ok:
+                    downtime = time.time() - lost_time if lost_time else 0
+                    lost_time = None
                     self.telegram.send_connection_restored(downtime)
-                    self._add_event(f"WebSocket baglantisi kuruldu (kesinti: {format_duration(downtime)})")
+                    self._add_event(f"Fiyat verisi yeniden geldi (kesinti: {format_duration(downtime)})")
 
-                was_connected = is_connected
+                was_ok = is_ok
 
-                if not is_connected:
-                    self.ws.check_health()
+            if time.time() - last_sync >= 300:
+                self._sync_positions()
+                last_sync = time.time()
 
     def _config_watch_loop(self):
         while not self._stop_event.is_set():
@@ -365,8 +389,10 @@ class BotManager:
         self.executor.reload_config(new_config)
 
         eco_map = {
-            "kirmizi": "kirmizi", "beyaz": "beyaz",
-            "sari": "sari", "siyah": "siyah", "gold": "gold"
+            "beyaz": "beyaz",
+            "sari": "sari", "siyah": "siyah",
+            "altin": "altin",
+            "kirmizi": "kirmizi"
         }
         for config_key, eco_name in eco_map.items():
             if eco_name in self.ecosystems:
@@ -445,8 +471,8 @@ class BotManager:
             "uptime": time.time() - self.start_time if self.start_time > 0 else 0,
             "open_counts": self._get_open_counts(),
             "ecosystem_states": {n: e.active for n, e in self.ecosystems.items()},
-            "ws_connected": self.ws.is_connected if self.ws else False,
-            "last_data_ago": self.ws.seconds_since_last_data if self.ws else -1
+            "price_ok": (self.poller.seconds_since_last_price < 60) if self.poller else False,
+            "last_data_ago": self.poller.seconds_since_last_price if self.poller else -1
         }
 
     def get_all_positions(self):
@@ -474,6 +500,26 @@ class BotManager:
                 })
         return positions
 
+    def get_orphan_positions(self):
+        bybit_positions = self.bybit.get_positions()
+
+        bot_keys = set()
+        for eco in self.ecosystems.values():
+            for trade in eco.get_all_trades():
+                idx = 1 if trade.side == "long" else 2
+                bot_keys.add((trade.symbol, idx))
+
+        orphans = []
+        for pos in bybit_positions:
+            idx = pos.get("position_idx", 0)
+            if (pos["symbol"], idx) not in bot_keys:
+                link_id = pos.get("order_link_id", "")
+                orphans.append({
+                    **pos,
+                    "pos_type": "bizim" if is_our_order(link_id) else "yabanci"
+                })
+        return orphans
+
     def get_all_flags(self):
         all_flags = []
         for eco_name, eco in self.ecosystems.items():
@@ -500,8 +546,8 @@ class BotManager:
         self.running = False
         self._stop_event.set()
 
-        if self.ws:
-            self.ws.stop()
+        if self.poller:
+            self.poller.stop()
 
         log.info("Bot kapatildi")
         log.info("=" * 60)

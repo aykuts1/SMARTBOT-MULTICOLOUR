@@ -31,22 +31,11 @@
         "periyodik_rapor_24s": true
     },
 
-    "kirmizi": {
-        "_aciklama": "Kırmızı Ekosistem - Anlık fiyat, EMA48 bant yapısı",
-        "aktif": true,
-        "timeframe": "30",
-        "ema_periyodu": 48,
-        "atr_periyodu": 48,
-        "bant_carpani": 1.0,
-        "flag_giris_atr": 1,
-        "islem_giris_atr": 2,
-        "mavi_hedge_giris_atr": 0.5,
-        "chandelier_atr_carpani": 2
-    },
-
     "beyaz": {
         "_aciklama": "Beyaz Ekosistem - Mum kapanışı, Stokastik + MACD",
         "aktif": true,
+        "max_beyaz_islem": 10,
+        "max_mor_islem": 10,
         "timeframe": "30",
         "ema_periyodu": 48,
         "atr_periyodu": 48,
@@ -59,7 +48,7 @@
         "bekleme_mum_sayisi": 5,
         "lose_exit_atr": 1.0,
         "winrate_atr": 2.5,
-        "mor_hedge_giris_atr": 0.25,
+        "mor_hedge_giris_atr": 0.5,
         "chandelier_atr_carpani": 1
     },
 
@@ -74,24 +63,46 @@
         "chandelier_mesafe_carpani": 1
     },
 
+    "kirmizi": {
+        "_aciklama": "Kırmızı Ekosistemi - Keltner(48,1) EMA cross flag + bant cross giriş; Mavi dış bant flag + iç bant giriş",
+        "aktif": true,
+        "timeframe": "30",
+        "keltner_ema_periyot": 48,
+        "keltner_atr_periyot": 48,
+        "keltner_carpan": 1.0,
+        "keltner_dis_carpan": 1.5,
+        "max_kirmizi_islem": 20,
+        "max_mavi_islem": 20,
+        "winrate_mesafe_carpani": 2.5
+    },
+
+    "altin": {
+        "_aciklama": "Altın Ekosistemi - Mum kapanışı, KDJ + Keltner Kanalı",
+        "aktif": true,
+        "timeframe": "30",
+        "kdj_periyot": 9,
+        "kdj_k_smooth": 3,
+        "kdj_d_smooth": 3,
+        "keltner_ema_periyot": 200,
+        "keltner_atr_periyot": 200,
+        "keltner_carpan": 1.0,
+        "max_altin_islem": 10,
+        "max_gumus_islem": 10,
+        "lose_exit_yuzde": 0.02,
+        "winrate_yuzde": 0.05
+    },
+
     "siyah": {
         "_aciklama": "Siyah Ekosistem - Mum kapanışı, Donchian + EMA48",
         "aktif": true,
         "timeframe": "30",
         "donchian_periyodu": 50,
         "ema_periyodu": 48,
+        "max_siyah_islem": 10,
+        "max_gri_islem": 10,
         "max_lose_exit_yuzdesi": 0.02,
         "winrate_mesafe_carpani": 2.5,
         "chandelier_mesafe_carpani": 1
     },
 
-    "gold": {
-        "_aciklama": "Gold Ekosistem - Anlık fiyat, EMA21 bant yapısı, dinamik seviyeler",
-        "aktif": true,
-        "timeframe": "30",
-        "ema_periyodu": 21,
-        "atr_periyodu": 21,
-        "bant_carpanlari": [0.25, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0],
-        "chandelier_atr_carpani": 1
-    }
 }

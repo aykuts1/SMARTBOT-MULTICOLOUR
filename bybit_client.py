@@ -2,7 +2,7 @@ import os
 import time
 from pybit.unified_trading import HTTP
 from logger_setup import get_logger
-from utils import tick_round, qty_round_down, sl_round, generate_order_link_id
+from utils import tick_round, qty_round_down, qty_to_str, price_to_str, sl_round, generate_order_link_id
 
 log = get_logger("bybit_client")
 
@@ -240,7 +240,7 @@ class BybitClient:
                 "symbol": symbol,
                 "side": bybit_side,
                 "orderType": "Market",
-                "qty": str(rounded_qty),
+                "qty": qty_to_str(rounded_qty, qty_step),
                 "positionIdx": position_idx,
                 "timeInForce": "IOC"
             }
@@ -250,7 +250,7 @@ class BybitClient:
 
             if sl_price:
                 rounded_sl = sl_round(0, sl_price, tick_size, side)
-                params["stopLoss"] = str(rounded_sl)
+                params["stopLoss"] = price_to_str(rounded_sl, tick_size)
                 params["slTriggerBy"] = "LastPrice"
 
             log.info("Emir gonderiliyor: %s %s %s qty=%.6f sl=%s",
@@ -296,7 +296,7 @@ class BybitClient:
                 symbol=symbol,
                 side=close_side,
                 orderType="Market",
-                qty=str(rounded_qty),
+                qty=qty_to_str(rounded_qty, qty_step),
                 positionIdx=position_idx,
                 reduceOnly=True,
                 timeInForce="IOC"
