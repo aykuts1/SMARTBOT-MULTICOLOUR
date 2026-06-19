@@ -156,7 +156,7 @@ Stop loss'lar aktif."""
 
         self.record_open(ecosystem.lower())
 
-        is_hedge = ecosystem.lower() in ("mor", "turuncu", "gri", "gumus")
+        is_hedge = False
         is_dynamic = table.get("dynamic", False)
 
         msg = f"""{side_emoji(side)} İŞLEM AÇILDI — {side_display(side)}
@@ -390,7 +390,7 @@ Stop loss'lar aktif."""
         pct = (pnl / balance * 100) if balance > 0 else 0
 
         eco_lines = []
-        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi", "mavi"]:
+        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
             eco = stats["ecosystem_stats"].get(name, {})
             oc = open_counts.get(name, 0)
             closed = eco.get("closed", 0)
@@ -536,7 +536,7 @@ Stop loss'lar aktif."""
     def _build_eco_table(self, stats, open_counts, show_winpct=False):
         header = "📊 Ekosistem Detayı:\n"
         lines = []
-        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi", "mavi"]:
+        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
             eco = stats["ecosystem_stats"].get(name, {})
             oc = open_counts.get(name, 0)
             opened = eco.get("opened", 0)
@@ -553,7 +553,7 @@ Stop loss'lar aktif."""
 
     def _build_eco_pnl(self, stats, show_icon=False):
         lines = ["💰 Ekosistem PnL:"]
-        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi", "mavi"]:
+        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
             eco = stats["ecosystem_stats"].get(name, {})
             epnl = eco.get("pnl", 0.0)
             sign = "+" if epnl >= 0 else ""
@@ -619,7 +619,7 @@ Stop loss'lar aktif."""
         total = sum(oc.values())
 
         eco_lines = []
-        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi", "mavi"]:
+        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
             eco = self.daily_stats["ecosystem_stats"].get(name, {})
             epnl = eco.get("pnl", 0.0)
             sign = "+" if epnl >= 0 else ""
@@ -657,7 +657,7 @@ Stop loss'lar aktif."""
         last_data = info.get("last_data_ago", -1)
 
         eco_lines = []
-        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi", "mavi"]:
+        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
             active = eco_states.get(name, False)
             icon = "✅" if active else "⛔"
             count = oc.get(name, 0)
@@ -695,11 +695,11 @@ Stop loss'lar aktif."""
         positions = self.bot_manager.get_all_positions()
 
         groups = [
-            ("beyaz",   ["beyaz", "mor"]),
-            ("sari",    ["sari", "turuncu"]),
-            ("siyah",   ["siyah", "gri"]),
-            ("altin",   ["altin", "gumus"]),
-            ("kirmizi", ["kirmizi", "mavi"]),
+            ("beyaz",   ["beyaz"]),
+            ("sari",    ["sari"]),
+            ("siyah",   ["siyah"]),
+            ("altin",   ["altin"]),
+            ("kirmizi", ["kirmizi"]),
         ]
 
         by_eco = {}
@@ -779,11 +779,11 @@ Stop loss'lar aktif."""
             ("24 SAAT", self.daily_stats),
         ]
         groups = [
-            ["beyaz", "mor"],
-            ["sari", "turuncu"],
-            ["siyah", "gri"],
-            ["altin", "gumus"],
-            ["kirmizi", "mavi"],
+            ["beyaz"],
+            ["sari"],
+            ["siyah"],
+            ["altin"],
+            ["kirmizi"],
         ]
 
         msg = f"📊 PERFORMANS RAPORU\n🕐 {now_str()}\n"
@@ -928,7 +928,7 @@ Stop loss'lar aktif."""
         wr = (self.daily_stats["wins"] / self.daily_stats["closed"] * 100) if self.daily_stats["closed"] > 0 else 0
 
         eco_lines = []
-        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi", "mavi"]:
+        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
             eco = self.daily_stats["ecosystem_stats"].get(name, {})
             epnl = eco.get("pnl", 0.0)
             sign = "+" if epnl >= 0 else ""
