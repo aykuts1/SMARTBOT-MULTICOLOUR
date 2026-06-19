@@ -34,19 +34,29 @@ if %ERRORLEVEL% NEQ 0 (
 
 :push
 echo.
-echo GitHub'a push ediliyor...
-git push origin main
-if %ERRORLEVEL% NEQ 0 (
+set RETRY=0
+
+:push_retry
+set /a RETRY+=1
+echo Push deneme %RETRY%/3 ...
+git push origin main 2>&1
+if %ERRORLEVEL% EQU 0 (
     echo.
-    echo HATA: Push basarisiz!
-    echo GitHub kimlik bilgilerinizi kontrol edin.
+    echo ========================================
+    echo   TAMAMLANDI - Railway deploy basliyor
+    echo ========================================
     goto :end
 )
 
+if %RETRY% LSS 3 (
+    echo Baglanti hatasi, 5 saniye sonra tekrar deneniyor...
+    timeout /t 5 /nobreak >nul
+    goto :push_retry
+)
+
 echo.
-echo ========================================
-echo   TAMAMLANDI - Railway deploy basliyor
-echo ========================================
+echo HATA: Push 3 denemede de basarisiz!
+echo Yukaridaki hata mesajini kontrol edin.
 
 :end
 echo.
