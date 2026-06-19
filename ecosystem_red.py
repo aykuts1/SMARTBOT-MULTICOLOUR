@@ -160,6 +160,8 @@ class RedEcosystem(EcosystemBase):
                 if trade.chandelier_active:
                     if self._check_band_reentry(trade, symbol, price):
                         to_close.append((trade, "Bant İçi"))
+                    elif self.update_chandelier(trade, price):
+                        to_close.append((trade, "Chandelier"))
                     elif self.check_lose_exit(trade, price):
                         to_close.append((trade, "Lose Exit"))
                 else:
