@@ -135,6 +135,21 @@ class RedEcosystem(EcosystemBase):
                     trade.entry_price, price, chandelier_level
                 )
 
+    def _check_band_reentry(self, trade, symbol, price):
+        ind = self.data_pool.get_indicators(symbol)
+        if not ind:
+            return False
+        kc_upper = ind.get("kc_red_upper", [])
+        kc_lower = ind.get("kc_red_lower", [])
+        if not kc_upper or not kc_lower:
+            return False
+        cur_upper = kc_upper[-1]
+        cur_lower = kc_lower[-1]
+        if trade.side == "short":
+            return price >= cur_lower
+        else:
+            return price <= cur_upper
+
     def _check_kirmizi_exits_tick(self, symbol, price):
         to_close = []
         with self._lock:
@@ -142,12 +157,16 @@ class RedEcosystem(EcosystemBase):
                 if trade.symbol != symbol or trade.ecosystem != "kirmizi":
                     continue
                 self._activate_chandelier_if_ready(trade, price)
-                if self.check_winrate(trade, price):
-                    to_close.append((trade, "Winrate"))
-                elif self.check_lose_exit(trade, price):
-                    to_close.append((trade, "Lose Exit"))
-                elif self.update_chandelier(trade, price):
-                    to_close.append((trade, "Chandelier"))
+                if trade.chandelier_active:
+                    if self._check_band_reentry(trade, symbol, price):
+                        to_close.append((trade, "Bant İçi"))
+                    elif self.check_lose_exit(trade, price):
+                        to_close.append((trade, "Lose Exit"))
+                else:
+                    if self.check_winrate(trade, price):
+                        to_close.append((trade, "Winrate"))
+                    elif self.check_lose_exit(trade, price):
+                        to_close.append((trade, "Lose Exit"))
 
         for trade, reason in to_close:
             close_info = self.executor.close_trade(trade, reason, price)
