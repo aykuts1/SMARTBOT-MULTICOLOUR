@@ -15,6 +15,20 @@ class TradeExecutor:
         self.config = config
         self.telegram = telegram_bot
         self._closing_threads = {}
+        self._sl_provider = None
+
+    def set_sl_provider(self, callback):
+        self._sl_provider = callback
+
+    def update_position_sl(self, symbol, side):
+        if not self._sl_provider:
+            return
+        sls = self._sl_provider(symbol, side)
+        if not sls:
+            return
+        widest = min(sls) if side == "long" else max(sls)
+        self.client.set_position_sl(symbol, side, widest)
+        log.info("Pozisyon SL ayarlandi: %s %s → %.6f (%d islem)", symbol, side, widest, len(sls))
 
     def reload_config(self, config):
         self.config = config

@@ -282,6 +282,29 @@ class BybitClient:
                 "error": str(e)
             }
 
+    def set_position_sl(self, symbol, side, sl_price):
+        try:
+            position_idx = 1 if side == "long" else 2
+            info = self.instrument_info.get(symbol, {})
+            tick_size = info.get("tick_size", 0.01)
+            rounded_sl = sl_round(0, sl_price, tick_size, side)
+            result = self.client.set_trading_stop(
+                category="linear",
+                symbol=symbol,
+                stopLoss=price_to_str(rounded_sl, tick_size),
+                slTriggerBy="LastPrice",
+                positionIdx=position_idx
+            )
+            if result["retCode"] == 0:
+                log.info("Pozisyon SL guncellendi: %s %s → %.6f", symbol, side, rounded_sl)
+                return True
+            else:
+                log.error("Pozisyon SL guncellenemedi: %s %s hata=%s", symbol, side, result.get("retMsg", ""))
+                return False
+        except Exception as e:
+            log.error("Pozisyon SL guncelleme hatasi: %s %s %s", symbol, side, e)
+            return False
+
     def close_position(self, symbol, side, qty):
         close_side = "Sell" if side == "long" else "Buy"
         position_idx = 1 if side == "long" else 2

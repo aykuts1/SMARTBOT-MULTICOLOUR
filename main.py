@@ -41,6 +41,7 @@ class BotManager:
         # Ekosistemler
         self.ecosystems = {}
         self._init_ecosystems()
+        self.executor.set_sl_provider(self._get_all_trade_sls)
 
         # Price Poller
         self.poller = None
@@ -68,6 +69,15 @@ class BotManager:
         self.ecosystems["kirmizi"] = RedEcosystem(
             cfg.get("kirmizi", {}), self.data_pool, self.executor, self.telegram
         )
+
+    def _get_all_trade_sls(self, symbol, side):
+        sls = []
+        for eco in self.ecosystems.values():
+            with eco._lock:
+                for t in eco.trades:
+                    if t.symbol == symbol and t.side == side and getattr(t, 'sl_price', 0) > 0:
+                        sls.append(t.sl_price)
+        return sls
 
     # === ANA BAŞLATMA ===
 
