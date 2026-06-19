@@ -55,6 +55,7 @@
     "sari": {
         "_aciklama": "Sarı Ekosistem - Mum kapanışı, Bollinger Bandı",
         "aktif": true,
+        "max_sari_islem": 10,
         "timeframe": "30",
         "bollinger_periyot": 20,
         "bollinger_sapma": 2,
