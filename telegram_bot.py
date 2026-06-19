@@ -993,7 +993,7 @@ Stop loss'lar aktif."""
             by_eco.setdefault(eco, []).append(f)
 
         msg = f"🚩 AÇIK FLAGLER\n🕐 {now_str()}\n\nToplam: {len(flags)} flag\n"
-        for eco_name in ["beyaz", "sari", "siyah"]:
+        for eco_name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
             if eco_name not in by_eco:
                 continue
             eco_flags = by_eco[eco_name]
