@@ -356,6 +356,21 @@ Stop loss'lar aktif."""
 🗑️ Bot takibinden kaldırıldı."""
         self.send(msg)
 
+    def send_sl_guard_close(self, symbol, side, entry_price, size, loss_pct):
+        msg = f"""🛡️ SL EMNİYET KAPANİŞİ
+
+🪙 {symbol}
+🕐 {now_str()}
+
+📊 Yön:    {side_display(side)}
+💵 Giriş:  {format_usdt(entry_price)} USDT
+📦 Miktar: {size:.6f}
+📉 Zarar:  %{loss_pct * 100:.2f}
+
+⚠️ Bot kendi SL kuralını uyguladı.
+Tüm ilgili işlemler takibinden kaldırıldı."""
+        self.send(msg)
+
     def send_untracked_positions(self, positions):
         if not positions:
             return
@@ -1011,6 +1026,72 @@ Stop loss'lar aktif."""
     def cmd_iptal(self, chat_id, args):
         self._reply(chat_id, "❌ İşlem iptal edildi.")
 
+    def cmd_son100(self, chat_id, args):
+        import trade_history
+        records = trade_history.get_last(100)
+        if not records:
+            self._reply(chat_id, "❌ Henüz kapanan işlem kaydı yok.")
+            return
+
+        total_pnl = 0.0
+        win = 0
+        loss = 0
+        reason_counts = {}
+        lines = []
+
+        for i, r in enumerate(records, 1):
+            symbol = r.get("symbol", "?")
+            side = r.get("side", "")
+            side_icon = "📈" if side == "long" else "📉"
+            side_lbl = "LONG" if side == "long" else "SHORT"
+
+            pnl = float(r.get("pnl", 0))
+            total_pnl += pnl
+            pnl_icon = "✅" if pnl >= 0 else "❌"
+            pnl_str = f"+{pnl:.2f}" if pnl >= 0 else f"{pnl:.2f}"
+            if pnl >= 0:
+                win += 1
+            else:
+                loss += 1
+
+            entry = float(r.get("entry_price", 0))
+            exit_p = float(r.get("exit_price", 0))
+            eco_name = r.get("ecosystem", "")
+            eco_lbl = ecosystem_display_name(eco_name) if eco_name else "—"
+            eco_ico = ecosystem_emoji(eco_name) if eco_name else "⚪"
+
+            reason = r.get("reason", "—")
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+
+            ts = float(r.get("time", 0))
+            dt = datetime.fromtimestamp(ts).strftime("%d.%m %H:%M") if ts > 0 else "?"
+
+            lines.append(
+                f"{i:>3}. {pnl_icon} {symbol}  {side_icon} {side_lbl}  {eco_ico} {eco_lbl}\n"
+                f"      {entry:.4f} → {exit_p:.4f}  |  {pnl_str} USDT\n"
+                f"      📌 {reason}  |  {dt}"
+            )
+
+        reason_lines = "\n".join(
+            f"  {reason}: {count}"
+            for reason, count in sorted(reason_counts.items(), key=lambda x: -x[1])
+        )
+
+        header = (
+            f"📊 SON {len(records)} KAPANAN İŞLEM\n"
+            f"🕐 {now_str()}\n\n"
+            f"✅ Kazanan: {win}   ❌ Kaybeden: {loss}\n"
+            f"💰 Toplam PnL: {'+' if total_pnl >= 0 else ''}{total_pnl:.2f} USDT\n\n"
+            f"📌 Kapanış Sebepleri:\n{reason_lines}\n"
+            f"{'─' * 32}\n\n"
+        )
+
+        chunk_size = 20
+        for start in range(0, len(lines), chunk_size):
+            chunk = lines[start:start + chunk_size]
+            msg = (header if start == 0 else "") + "\n\n".join(chunk)
+            self._reply(chat_id, msg[:4096])
+
     def cmd_yardim(self, chat_id, args):
         msg = """📋 KOMUT LİSTESİ
 
@@ -1025,6 +1106,7 @@ Stop loss'lar aktif."""
   /pozisyonlar — Açık pozisyonlar listesi
   /flagler — Açık flagler
   /log — Son 10 olay
+  /son100 — Son 100 kapanan işlem (ekosistem, yön, PnL)
 
 ⚙️ Kontrol Komutları:
   /durdur — Botu durdur (onay ister)
@@ -1085,6 +1167,7 @@ Stop loss'lar aktif."""
             "panic": self.cmd_panic,
             "panic_onayla": self.cmd_panic_onayla,
             "flagler": self.cmd_flagler,
+            "son100": self.cmd_son100,
             "iptal": self.cmd_iptal,
             "yardim": self.cmd_yardim,
         }

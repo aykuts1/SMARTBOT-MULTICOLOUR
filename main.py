@@ -19,6 +19,7 @@ from ecosystem_black import BlackEcosystem
 from ecosystem_gold import GoldEcosystem
 from ecosystem_red import RedEcosystem
 from telegram_bot import TelegramBot
+import trade_history
 
 setup_logger()
 log = get_logger("main")
@@ -41,7 +42,6 @@ class BotManager:
         # Ekosistemler
         self.ecosystems = {}
         self._init_ecosystems()
-        self.executor.set_sl_provider(self._get_all_trade_sls)
 
         # Price Poller
         self.poller = None
@@ -70,14 +70,6 @@ class BotManager:
             cfg.get("kirmizi", {}), self.data_pool, self.executor, self.telegram
         )
 
-    def _get_all_trade_sls(self, symbol, side):
-        sls = []
-        for eco in self.ecosystems.values():
-            with eco._lock:
-                for t in eco.trades:
-                    if t.symbol == symbol and t.side == side and getattr(t, 'sl_price', 0) > 0:
-                        sls.append(t.sl_price)
-        return sls
 
     # === ANA BAŞLATMA ===
 
@@ -262,6 +254,49 @@ class BotManager:
             target=self._config_watch_loop, daemon=True, name="config_watch"
         )
         self._config_thread.start()
+
+        # SL emniyet kemeri
+        self._sl_guard_thread = threading.Thread(
+            target=self._sl_guard_loop, daemon=True, name="sl_guard"
+        )
+        self._sl_guard_thread.start()
+
+    def _sl_guard_loop(self):
+        sl_pct = self.config["global"].get("stop_loss_orani", 0.02)
+        while not self._stop_event.is_set():
+            self._stop_event.wait(5)
+            if self._stop_event.is_set():
+                break
+            if not self.running:
+                continue
+            try:
+                positions = self.bybit.get_positions()
+                for pos in positions:
+                    entry = pos["entry_price"]
+                    size = pos["size"]
+                    pnl = pos["unrealised_pnl"]
+                    if entry <= 0 or size <= 0 or pnl >= 0:
+                        continue
+                    loss_pct = -pnl / (entry * size)
+                    if loss_pct >= sl_pct:
+                        symbol = pos["symbol"]
+                        side = pos["side"]
+                        log.warning("SL GUARD: %s %s zarar=%.2f%% - kapatiliyor", symbol, side, loss_pct * 100)
+                        result = self.bybit.close_position(symbol, side, size)
+                        if result["success"]:
+                            for eco in self.ecosystems.values():
+                                for trade in eco.find_trades_for_symbol(symbol, side):
+                                    eco.remove_trade(trade)
+                                with eco._lock:
+                                    stale = [h for h in eco.hedge_trades if h.symbol == symbol and h.side == side]
+                                for h in stale:
+                                    eco.remove_hedge_trade(h)
+                            exit_price = (entry + pnl / size) if side == "long" else (entry - pnl / size)
+                            trade_history.record(symbol, side, "sl_guard", entry, exit_price, size, pnl, "SL Emniyet Kemeri")
+                            if self.telegram:
+                                self.telegram.send_sl_guard_close(symbol, side, entry, size, loss_pct)
+            except Exception as e:
+                log.error("SL guard hatasi: %s", e)
 
     def _scan_loop(self):
         coins = self.config["global"]["coin_listesi"]

@@ -5,6 +5,7 @@ from utils import (
     calc_position_size, calc_sl_price, calc_pnl,
     generate_order_link_id, format_usdt, qty_round_down, sl_round
 )
+import trade_history
 
 log = get_logger("trade_executor")
 
@@ -15,20 +16,6 @@ class TradeExecutor:
         self.config = config
         self.telegram = telegram_bot
         self._closing_threads = {}
-        self._sl_provider = None
-
-    def set_sl_provider(self, callback):
-        self._sl_provider = callback
-
-    def update_position_sl(self, symbol, side):
-        if not self._sl_provider:
-            return
-        sls = self._sl_provider(symbol, side)
-        if not sls:
-            return
-        widest = min(sls) if side == "long" else max(sls)
-        self.client.set_position_sl(symbol, side, widest)
-        log.info("Pozisyon SL ayarlandi: %s %s → %.6f (%d islem)", symbol, side, widest, len(sls))
 
     def reload_config(self, config):
         self.config = config
@@ -198,6 +185,7 @@ class TradeExecutor:
 
                 log.info("ISLEM KAPANDI: %s %s %s cikis=%.4f pnl=%.2f (%s)",
                          symbol, side, ecosystem, exit_price, pnl, reason)
+                trade_history.record(symbol, side, ecosystem, entry_price, exit_price, qty, pnl, reason)
                 return close_info
 
             elapsed = time.time() - start_time

@@ -99,15 +99,11 @@ class EcosystemBase:
     def add_trade(self, trade):
         with self._lock:
             self.trades.append(trade)
-        if hasattr(self.executor, 'update_position_sl'):
-            self.executor.update_position_sl(trade.symbol, trade.side)
 
     def remove_trade(self, trade):
         with self._lock:
             if trade in self.trades:
                 self.trades.remove(trade)
-        if hasattr(self.executor, 'update_position_sl'):
-            self.executor.update_position_sl(trade.symbol, trade.side)
 
     def add_hedge_trade(self, trade):
         with self._lock:

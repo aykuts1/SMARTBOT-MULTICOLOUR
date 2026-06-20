@@ -211,7 +211,7 @@ class BybitClient:
             log.error("Pozisyon hatasi: %s", e)
             return []
 
-    def get_closed_pnl(self, symbol=None, limit=50):
+    def get_closed_pnl(self, symbol=None, limit=100):
         try:
             params = {"category": "linear", "limit": limit}
             if symbol:
@@ -248,14 +248,8 @@ class BybitClient:
             if order_link_id:
                 params["orderLinkId"] = order_link_id
 
-            if sl_price:
-                rounded_sl = sl_round(0, sl_price, tick_size, side)
-                params["stopLoss"] = price_to_str(rounded_sl, tick_size)
-                params["slTriggerBy"] = "LastPrice"
-
-            log.info("Emir gonderiliyor: %s %s %s qty=%.6f sl=%s",
-                     symbol, side, bybit_side, rounded_qty,
-                     sl_price if sl_price else "yok")
+            log.info("Emir gonderiliyor: %s %s %s qty=%.6f",
+                     symbol, side, bybit_side, rounded_qty)
 
             result = self.client.place_order(**params)
 
@@ -348,6 +342,9 @@ class BybitClient:
                     "error": result["retMsg"]
                 }
         except Exception as e:
+            if "110017" in str(e):
+                log.warning("Kapatma: %s %s pozisyon zaten kapali (110017)", symbol, side)
+                return {"success": True, "already_closed": True, "order_id": "", "qty": rounded_qty}
             log.error("Kapatma hatasi: %s %s - %s", symbol, side, e)
             return {
                 "success": False,
