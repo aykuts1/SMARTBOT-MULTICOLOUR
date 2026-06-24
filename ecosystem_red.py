@@ -1,178 +1,198 @@
-from ecosystem_base import EcosystemBase, Trade
-from trade_table import create_red_table
+import threading
 from logger_setup import get_logger
 
 log = get_logger("ecosystem_red")
 
 
-class RedEcosystem(EcosystemBase):
-    def __init__(self, config, data_pool, trade_executor, telegram_bot=None):
-        super().__init__("kirmizi", config, data_pool, trade_executor, telegram_bot)
-        self.max_kirmizi = config.get("max_kirmizi_islem", 10)
-        self._prev_prices = {}
+class Trade:
+    def __init__(self, info):
+        self.symbol       = info["symbol"]
+        self.side         = info["side"]
+        self.ecosystem    = info["ecosystem"]
+        self.entry_price  = info["entry_price"]
+        self.qty          = info["qty"]
+        self.margin       = info["margin"]
+        self.leverage     = info["leverage"]
+        self.sl_price     = info["sl_price"]
+        self.commission   = info["commission"]
+        self.order_id     = info["order_id"]
+        self.order_link_id = info["order_link_id"]
+        self.open_time    = info["open_time"]
+        self.chandelier_active    = False
+        self.chandelier_trail_pct = 0.02
+        self.extreme_price        = info["entry_price"]
 
-    def _count_kirmizi(self):
-        with self._lock:
-            return sum(1 for t in self.trades if t.ecosystem == "kirmizi")
 
-    def can_open_kirmizi(self):
-        return self.active and self._count_kirmizi() < self.max_kirmizi
+class RedEcosystem:
+    MAX_PER_SYMBOL = 1
 
-    def _has_trade_eco(self, symbol, ecosystem):
-        with self._lock:
-            return any(t.symbol == symbol and t.ecosystem == ecosystem for t in self.trades)
+    def __init__(self, config, data_pool, executor, telegram):
+        self.config      = config
+        self.data_pool   = data_pool
+        self.executor    = executor
+        self.telegram    = telegram
+        self.active      = config.get("aktif", True)
+        self._lock       = threading.Lock()
+        self.trades      = []
+        self.hedge_trades = []
 
+    def reload_config(self, config):
+        self.config = config
+
+    # --- Mum kapanışı ---
     def on_candle_close(self, symbol, candle):
+        indicators = self.data_pool.get_indicators(symbol)
+        if not indicators:
+            return
+
+        colors = indicators.get("center_color", [])
+        if len(colors) < 2:
+            return
+
+        current_color = colors[-1]
+        prev_color    = colors[-2]
+
+        if not current_color or not prev_color or current_color == prev_color:
+            return
+
+        price = candle["close"]
+
+        # Önce bu coindeki mevcut işlemi kapat
+        with self._lock:
+            existing = [t for t in self.trades if t.symbol == symbol]
+        for trade in existing:
+            self._close_and_remove(trade, "renk_degisimi", price)
+
+        # Yeni yön
+        new_side = "long" if current_color == "green" else "short"
+
+        # Slot kontrolü
+        max_islem = self.config.get("max_islem", 10)
+        with self._lock:
+            total        = len(self.trades)
+            symbol_count = sum(1 for t in self.trades if t.symbol == symbol)
+
+        if total >= max_islem:
+            log.warning("Kirmizi slot dolu (%d/%d), %s atlaniyor", total, max_islem, symbol)
+            if self.telegram:
+                self.telegram.send_slot_full(symbol, "kirmizi", total)
+            return
+
+        if symbol_count >= self.MAX_PER_SYMBOL:
+            return
+
+        trade_info = self.executor.open_trade(symbol, new_side, "kirmizi", entry_price=price)
+        if not trade_info:
+            return
+
+        trade = Trade(trade_info)
+        with self._lock:
+            self.trades.append(trade)
+
+        if self.telegram:
+            cfg = self.config
+            sl_pct = cfg.get("sl_yuzde", 0.02)
+            tp_pct = cfg.get("tp_yuzde", 0.10)
+            if new_side == "short":
+                table = {"lose_exit": price * (1 + sl_pct), "winrate": price * (1 - tp_pct), "dynamic": False}
+            else:
+                table = {"lose_exit": price * (1 - sl_pct), "winrate": price * (1 + tp_pct), "dynamic": False}
+            self.telegram.send_trade_opened(trade_info, table)
+
+    # --- 5 saniyelik tick ---
+    def on_tick(self, symbol, price):
+        with self._lock:
+            symbol_trades = [t for t in self.trades if t.symbol == symbol]
+        for trade in symbol_trades:
+            self._check_exit(trade, price)
+
+    def _check_exit(self, trade, price):
+        with self._lock:
+            if trade not in self.trades:
+                return
+
+        entry = trade.entry_price
+        side  = trade.side
+        cfg   = self.config
+
+        sl_pct      = cfg.get("sl_yuzde",             0.02)
+        tp_pct      = cfg.get("tp_yuzde",             0.10)
+        ch_start    = cfg.get("chandelier_baslangic",  0.05)
+        ch_sikistir = cfg.get("chandelier_sikistir",   0.07)
+        trail1      = cfg.get("chandelier_trail_1",    0.02)
+        trail2      = cfg.get("chandelier_trail_2",    0.01)
+
+        pnl_pct = (entry - price) / entry if side == "short" else (price - entry) / entry
+
+        if pnl_pct <= -sl_pct:
+            self._close_and_remove(trade, "stop_loss", price)
+            return
+
+        if pnl_pct >= tp_pct:
+            self._close_and_remove(trade, "take_profit", price)
+            return
+
+        if pnl_pct >= ch_start and not trade.chandelier_active:
+            trade.chandelier_active    = True
+            trade.chandelier_trail_pct = trail1
+            trade.extreme_price        = price
+            log.debug("Chandelier aktif: %s %s @ %.4f", trade.symbol, side, price)
+            if self.telegram:
+                level = price * (1 + trail1) if side == "short" else price * (1 - trail1)
+                self.telegram.send_chandelier_activated(
+                    trade.symbol, "kirmizi", side, entry, price, level
+                )
+
+        if trade.chandelier_active:
+            if side == "short":
+                if price < trade.extreme_price:
+                    trade.extreme_price = price
+            else:
+                if price > trade.extreme_price:
+                    trade.extreme_price = price
+
+            if pnl_pct >= ch_sikistir:
+                trade.chandelier_trail_pct = trail2
+
+            if side == "short":
+                trail_price = trade.extreme_price * (1 + trade.chandelier_trail_pct)
+                if price >= trail_price:
+                    self._close_and_remove(trade, "chandelier", price)
+            else:
+                trail_price = trade.extreme_price * (1 - trade.chandelier_trail_pct)
+                if price <= trail_price:
+                    self._close_and_remove(trade, "chandelier", price)
+
+    def _close_and_remove(self, trade, reason, price):
+        with self._lock:
+            if trade not in self.trades:
+                return
+            self.trades.remove(trade)
+
+        close_info = self.executor.close_trade(trade, reason, price)
+        if close_info and self.telegram:
+            self.telegram.send_trade_closed(close_info)
+
+    # --- main.py arayüzü ---
+    def get_all_trades(self):
+        with self._lock:
+            return list(self.trades)
+
+    def get_total_count(self):
+        with self._lock:
+            return len(self.trades)
+
+    def remove_trade(self, trade):
+        with self._lock:
+            if trade in self.trades:
+                self.trades.remove(trade)
+
+    def remove_hedge_trade(self, trade):
         pass
 
-    def _open_kirmizi(self, symbol, price, lose_exit_price, side):
-        table = create_red_table(price, lose_exit_price, side, self.config)
-
-        trade_info = self.executor.open_trade(
-            symbol=symbol, side=side,
-            ecosystem="KIRMIZI", entry_price=price
-        )
-
-        if trade_info:
-            trade = Trade(
-                symbol=symbol, side=side, ecosystem="kirmizi",
-                entry_price=price, qty=trade_info["qty"], table=table,
-                order_link_id=trade_info["order_link_id"],
-                open_time=trade_info["open_time"],
-                margin=trade_info["margin"],
-                commission=trade_info["commission"],
-                leverage=trade_info["leverage"],
-                sl_price=trade_info["sl_price"],
-                order_id=trade_info["order_id"]
-            )
-            trade.chandelier_active = False
-            self.add_trade(trade)
-
-            if self.telegram:
-                self.telegram.send_trade_opened(trade_info, table)
-
-            log.info("KIRMIZI %s acildi: %s @ %.4f", side.upper(), symbol, price)
-
-    def on_tick(self, symbol, price):
-        if not self.active:
-            return
-        prev_price = self._prev_prices.get(symbol)
-        self._prev_prices[symbol] = price
-        self._check_kirmizi_flags(symbol, price, prev_price)
-        self._check_kirmizi_exits_tick(symbol, price)
-
-    def _check_kirmizi_flags(self, symbol, price, prev_price):
-        if prev_price is None:
-            return
-
-        ind = self.data_pool.get_indicators(symbol)
-        if not ind:
-            return
-
-        kc_middle = ind.get("kc_red_middle", [])
-        kc_upper = ind.get("kc_red_upper", [])
-        kc_lower = ind.get("kc_red_lower", [])
-
-        if not kc_middle or not kc_upper or not kc_lower:
-            return
-
-        current_ema = kc_middle[-1]
-        current_kc_upper = kc_upper[-1]
-        current_kc_lower = kc_lower[-1]
-
-        if current_ema <= 0:
-            return
-
-        # EMA cross aşağı → short flag aç, long flag sil
-        if prev_price >= current_ema and price < current_ema:
-            if not self.has_flag(symbol, "kirmizi_short_ema"):
-                self.set_flag(symbol, "kirmizi_short_ema", True)
-            self.clear_flag(symbol, "kirmizi_long_ema")
-
-        # EMA cross yukarı → long flag aç, short flag sil
-        if prev_price <= current_ema and price > current_ema:
-            if not self.has_flag(symbol, "kirmizi_long_ema"):
-                self.set_flag(symbol, "kirmizi_long_ema", True)
-            self.clear_flag(symbol, "kirmizi_short_ema")
-
-        # SHORT: alt bandı aşağı kes + flag → işlem aç
-        if (prev_price >= current_kc_lower and price < current_kc_lower
-                and self.has_flag(symbol, "kirmizi_short_ema")):
-            if self.can_open_kirmizi() and not self._has_trade_eco(symbol, "kirmizi"):
-                self._open_kirmizi(symbol, price, current_kc_upper, "short")
-                self.clear_flag(symbol, "kirmizi_short_ema")
-
-        # LONG: üst bandı yukarı kes + flag → işlem aç
-        if (prev_price <= current_kc_upper and price > current_kc_upper
-                and self.has_flag(symbol, "kirmizi_long_ema")):
-            if self.can_open_kirmizi() and not self._has_trade_eco(symbol, "kirmizi"):
-                self._open_kirmizi(symbol, price, current_kc_lower, "long")
-                self.clear_flag(symbol, "kirmizi_long_ema")
-
-    def _activate_chandelier_if_ready(self, trade, price):
-        if trade.chandelier_active:
-            return
-        distance = trade.table.get("distance", 0)
-        entry = trade.table.get("entry", trade.entry_price)
-        if distance <= 0:
-            return
-        if trade.side == "short" and price <= entry - distance:
-            trade.chandelier_active = True
-            trade.chandelier_extreme = price
-            if self.telegram:
-                chandelier_level = price + trade.table.get("chandelier_distance", distance)
-                self.telegram.send_chandelier_activated(
-                    trade.symbol, trade.ecosystem, trade.side,
-                    trade.entry_price, price, chandelier_level
-                )
-        elif trade.side == "long" and price >= entry + distance:
-            trade.chandelier_active = True
-            trade.chandelier_extreme = price
-            if self.telegram:
-                chandelier_level = price - trade.table.get("chandelier_distance", distance)
-                self.telegram.send_chandelier_activated(
-                    trade.symbol, trade.ecosystem, trade.side,
-                    trade.entry_price, price, chandelier_level
-                )
-
-    def _check_band_reentry(self, trade, symbol, price):
-        ind = self.data_pool.get_indicators(symbol)
-        if not ind:
-            return False
-        kc_upper = ind.get("kc_red_upper", [])
-        kc_lower = ind.get("kc_red_lower", [])
-        if not kc_upper or not kc_lower:
-            return False
-        cur_upper = kc_upper[-1]
-        cur_lower = kc_lower[-1]
-        if trade.side == "short":
-            return price >= cur_lower
-        else:
-            return price <= cur_upper
-
-    def _check_kirmizi_exits_tick(self, symbol, price):
-        to_close = []
+    def find_trades_for_symbol(self, symbol, side):
         with self._lock:
-            for trade in list(self.trades):
-                if trade.symbol != symbol or trade.ecosystem != "kirmizi":
-                    continue
-                self._activate_chandelier_if_ready(trade, price)
-                if trade.chandelier_active:
-                    if self._check_band_reentry(trade, symbol, price):
-                        to_close.append((trade, "Bant İçi"))
-                    elif self.update_chandelier(trade, price):
-                        to_close.append((trade, "Chandelier"))
-                    elif self.check_lose_exit(trade, price):
-                        to_close.append((trade, "Lose Exit"))
-                else:
-                    if self.check_winrate(trade, price):
-                        to_close.append((trade, "Winrate"))
-                    elif self.check_lose_exit(trade, price):
-                        to_close.append((trade, "Lose Exit"))
+            return [t for t in self.trades if t.symbol == symbol and t.side == side]
 
-        for trade, reason in to_close:
-            close_info = self.executor.close_trade(trade, reason, price)
-            if close_info:
-                self.remove_trade(trade)
-                if self.telegram:
-                    self.telegram.send_trade_closed(close_info)
+    def get_open_flags(self):
+        return []

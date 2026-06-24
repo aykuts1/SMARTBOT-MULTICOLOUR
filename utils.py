@@ -137,13 +137,7 @@ def parse_order_link_id(order_link_id):
 
 
 def is_our_order(order_link_id):
-    valid_prefixes = [
-        "BEYAZ", "MOR",
-        "SARI", "TURUNCU",
-        "SIYAH", "GRI",
-        "ALTIN", "GUMUS",
-        "KIRMIZI", "MAVI"
-    ]
+    valid_prefixes = ["KIRMIZI", "MAVI"]
     if not order_link_id:
         return False
     prefix = order_link_id.split("_")[0] if "_" in order_link_id else ""
@@ -152,22 +146,16 @@ def is_our_order(order_link_id):
 
 def ecosystem_emoji(name):
     emojis = {
-        "beyaz": "⬜", "mor": "🟣",
-        "sari": "🟡", "turuncu": "🟠",
-        "siyah": "⬛", "gri": "🔘",
-        "altin": "🟨", "gumus": "🩶",
-        "kirmizi": "🟥", "mavi": "🟦"
+        "kirmizi": "🟥",
+        "mavi":    "🟦",
     }
     return emojis.get(name.lower(), "⚪")
 
 
 def ecosystem_display_name(name):
     names = {
-        "beyaz": "Beyaz", "mor": "Mor",
-        "sari": "Sarı", "turuncu": "Turuncu",
-        "siyah": "Siyah", "gri": "Gri",
-        "altin": "Altın", "gumus": "Gümüş",
-        "kirmizi": "Kırmızı", "mavi": "Mavi"
+        "kirmizi": "Kırmızı",
+        "mavi":    "Mavi",
     }
     return names.get(name.lower(), name)
 

@@ -13,11 +13,8 @@ from price_poller import PricePoller
 from data_pool import DataPool
 from indicators import compute_all_indicators
 from trade_executor import TradeExecutor
-from ecosystem_white import WhiteEcosystem
-from ecosystem_yellow import YellowEcosystem
-from ecosystem_black import BlackEcosystem
-from ecosystem_gold import GoldEcosystem
 from ecosystem_red import RedEcosystem
+from ecosystem_blue import BlueEcosystem
 from telegram_bot import TelegramBot
 import trade_history
 
@@ -54,20 +51,11 @@ class BotManager:
 
     def _init_ecosystems(self):
         cfg = self.config
-        self.ecosystems["beyaz"] = WhiteEcosystem(
-            cfg.get("beyaz", {}), self.data_pool, self.executor, self.telegram
-        )
-        self.ecosystems["sari"] = YellowEcosystem(
-            cfg.get("sari", {}), self.data_pool, self.executor, self.telegram
-        )
-        self.ecosystems["siyah"] = BlackEcosystem(
-            cfg.get("siyah", {}), self.data_pool, self.executor, self.telegram
-        )
-        self.ecosystems["altin"] = GoldEcosystem(
-            cfg.get("altin", {}), self.data_pool, self.executor, self.telegram
-        )
         self.ecosystems["kirmizi"] = RedEcosystem(
             cfg.get("kirmizi", {}), self.data_pool, self.executor, self.telegram
+        )
+        self.ecosystems["mavi"] = BlueEcosystem(
+            cfg.get("mavi", {}), self.data_pool, self.executor, self.telegram
         )
 
 
@@ -219,8 +207,7 @@ class BotManager:
 
         log.debug("%s mum kapandi: C=%.4f", symbol, candle["close"])
 
-        # Mum kapanışına göre çalışan ekosistemler: Beyaz, Sarı, Siyah
-        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
+        for name in ["kirmizi", "mavi"]:
             eco = self.ecosystems[name]
             if eco.active:
                 try:
@@ -312,7 +299,7 @@ class BotManager:
                 if not price or price <= 0:
                     continue
 
-                for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
+                for name in ["kirmizi", "mavi"]:
                     eco = self.ecosystems[name]
                     if eco.active:
                         try:
@@ -322,7 +309,7 @@ class BotManager:
 
     def _report_loop(self):
         last_1h = time.time()
-        last_6h = time.time()
+        last_4h = time.time()
         last_12h = time.time()
         last_24h = time.time()
 
@@ -342,9 +329,9 @@ class BotManager:
                 self.telegram.send_hourly_report(balance, open_counts)
                 last_1h = now
 
-            if now - last_6h >= 21600 and cfg_tg.get("periyodik_rapor_6s", True):
-                self.telegram.send_6h_report(balance, open_counts)
-                last_6h = now
+            if now - last_4h >= 14400 and cfg_tg.get("periyodik_rapor_4s", True):
+                self.telegram.send_4h_report(balance, open_counts)
+                last_4h = now
 
             if now - last_12h >= 43200 and cfg_tg.get("periyodik_rapor_12s", True):
                 self.telegram.send_12h_report(balance, open_counts)
@@ -433,16 +420,9 @@ class BotManager:
         self.config = new_config
         self.executor.reload_config(new_config)
 
-        eco_map = {
-            "beyaz": "beyaz",
-            "sari": "sari", "siyah": "siyah",
-            "altin": "altin",
-            "kirmizi": "kirmizi"
-        }
-        for config_key, eco_name in eco_map.items():
-            if eco_name in self.ecosystems:
-                eco_cfg = new_config.get(config_key, {})
-                self.ecosystems[eco_name].reload_config(eco_cfg)
+        for name in ["kirmizi", "mavi"]:
+            if name in self.ecosystems:
+                self.ecosystems[name].reload_config(new_config.get(name, {}))
 
         log.info("Config uygulandı (acik islemler eski parametrelerle devam eder)")
 

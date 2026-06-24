@@ -1,12 +1,11 @@
 {
-    "_aciklama": "Trade Bot Parametre Dosyası - Tüm sayısal değerler burada tutulur",
+    "_aciklama": "Trade Bot Parametre Dosyası — Tüm sayısal değerler burada tutulur",
 
     "global": {
         "_aciklama": "Genel bot ayarları",
         "kaldirac": 50,
-        "marjin_orani": 0.02,
-        "stop_loss_orani": 0.02,
-        "ekosistem_basina_max_islem": 10,
+        "marjin_orani": 0.05,
+        "stop_loss_orani": 0.05,
         "baslangic_mum_sayisi": 200,
         "timeframe": "30",
         "coin_listesi": [
@@ -18,92 +17,43 @@
         "islem_acma_deneme": 3,
         "islem_acma_bekleme_sn": 2,
         "islem_kapatma_bekleme_sn": 2,
-        "kapatma_hatasi_bildirim_aralik_sn": 300,
-        "ws_yeniden_baglanma_max_sn": 60
+        "kapatma_hatasi_bildirim_aralik_sn": 300
     },
 
     "telegram": {
-        "_aciklama": "Telegram ayarları - token ve chat_id Railway env'den okunur",
+        "_aciklama": "Telegram ayarları — token ve chat_id Railway env'den okunur",
         "aktif": true,
         "periyodik_rapor_1s": true,
-        "periyodik_rapor_6s": true,
+        "periyodik_rapor_4s": true,
         "periyodik_rapor_12s": true,
         "periyodik_rapor_24s": true
     },
 
-    "beyaz": {
-        "_aciklama": "Beyaz Ekosistem - Mum kapanışı, Stokastik + MACD",
-        "aktif": true,
-        "max_beyaz_islem": 10,
-        "max_mor_islem": 10,
-        "timeframe": "30",
-        "ema_periyodu": 48,
-        "atr_periyodu": 48,
-        "stokastik_k_length": 50,
-        "stokastik_k_smoothing": 21,
-        "stokastik_d": 8,
-        "macd_hizli": 21,
-        "macd_yavas": 50,
-        "macd_signal": 9,
-        "bekleme_mum_sayisi": 5,
-        "lose_exit_atr": 1.0,
-        "winrate_atr": 2.5,
-        "mor_hedge_giris_atr": 0.5,
-        "chandelier_atr_carpani": 1
-    },
-
-    "sari": {
-        "_aciklama": "Sarı Ekosistem - Mum kapanışı, Bollinger Bandı",
-        "aktif": true,
-        "max_sari_islem": 10,
-        "timeframe": "30",
-        "bollinger_periyot": 20,
-        "bollinger_sapma": 2,
-        "ardarda_temas_sayisi": 3,
-        "winrate_mesafe_carpani": 2.5,
-        "chandelier_mesafe_carpani": 1
-    },
-
     "kirmizi": {
-        "_aciklama": "Kırmızı Ekosistemi - Keltner(48,1) EMA cross flag + bant cross giriş; Mavi dış bant flag + iç bant giriş",
+        "_aciklama": "Kırmızı Thread — Merkez Çizgi renk değişiminde giriş, chandelier trailing stop",
         "aktif": true,
-        "timeframe": "30",
-        "keltner_ema_periyot": 48,
-        "keltner_atr_periyot": 48,
-        "keltner_carpan": 1.0,
-        "keltner_dis_carpan": 1.5,
-        "max_kirmizi_islem": 20,
-        "max_mavi_islem": 20,
-        "winrate_mesafe_carpani": 2.5
+        "max_islem": 10,
+        "sl_yuzde": 0.02,
+        "tp_yuzde": 0.10,
+        "chandelier_baslangic": 0.05,
+        "chandelier_trail_1": 0.02,
+        "chandelier_sikistir": 0.07,
+        "chandelier_trail_2": 0.01
     },
 
-    "altin": {
-        "_aciklama": "Altın Ekosistemi - Mum kapanışı, KDJ + Keltner Kanalı",
+    "mavi": {
+        "_aciklama": "Mavi Thread — Cross flag + Diş Bant kapanış girişi, bant/winrate/kâr çıkış",
         "aktif": true,
-        "timeframe": "30",
-        "kdj_periyot": 9,
-        "kdj_k_smooth": 3,
-        "kdj_d_smooth": 3,
-        "keltner_ema_periyot": 200,
-        "keltner_atr_periyot": 200,
-        "keltner_carpan": 1.0,
-        "max_altin_islem": 10,
-        "max_gumus_islem": 10,
-        "lose_exit_yuzde": 0.02,
-        "winrate_yuzde": 0.05
+        "max_islem": 10,
+        "tp_yuzde": 0.05
     },
 
-    "siyah": {
-        "_aciklama": "Siyah Ekosistem - Mum kapanışı, Donchian + EMA48",
-        "aktif": true,
-        "timeframe": "30",
-        "donchian_periyodu": 50,
-        "ema_periyodu": 48,
-        "max_siyah_islem": 10,
-        "max_gri_islem": 10,
-        "max_lose_exit_yuzdesi": 0.02,
-        "winrate_mesafe_carpani": 2.5,
-        "chandelier_mesafe_carpani": 1
+    "indicators": {
+        "_aciklama": "Gösterge parametreleri — her iki thread aynı değerleri kullanır",
+        "ema21_periyot": 21,
+        "ema50_periyot": 50,
+        "atr_periyot": 14,
+        "dis_carpan": 1.0,
+        "winrate_carpan": 6.0
     }
-
 }

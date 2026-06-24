@@ -22,15 +22,20 @@ class TelegramBot:
 
         self.daily_stats = self._init_stats()
         self.hourly_stats = self._init_stats()
-        self.stats_6h = self._init_stats()
+        self.stats_4h = self._init_stats()
         self.stats_12h = self._init_stats()
 
     def _init_stats(self):
         return {
             "opened": 0, "closed": 0, "skipped": 0,
             "wins": 0, "losses": 0, "pnl": 0.0, "commission": 0.0,
+            "total_win_pnl": 0.0, "total_loss_pnl": 0.0,
             "ecosystem_stats": {},
-            "exit_reasons": {"Winrate": 0, "Lose Exit": 0, "Chandelier": 0},
+            "coin_stats": {},
+            "exit_reasons": {
+                "stop_loss": 0, "take_profit": 0, "chandelier": 0, "renk_degisimi": 0,
+                "ust_dis_bant": 0, "alt_dis_bant": 0, "alt_winrate": 0, "ust_winrate": 0, "kar_al": 0
+            },
             "best_coin": None, "best_pnl": 0,
             "worst_coin": None, "worst_pnl": 0,
             "start_balance": 0
@@ -49,19 +54,21 @@ class TelegramBot:
         return stats["ecosystem_stats"][eco_name]
 
     def record_open(self, ecosystem):
-        for stats in [self.daily_stats, self.hourly_stats, self.stats_6h, self.stats_12h]:
+        for stats in [self.daily_stats, self.hourly_stats, self.stats_4h, self.stats_12h]:
             stats["opened"] += 1
             eco = self._get_eco_stats(stats, ecosystem)
             eco["opened"] += 1
 
     def record_close(self, ecosystem, pnl, reason, symbol):
-        for stats in [self.daily_stats, self.hourly_stats, self.stats_6h, self.stats_12h]:
+        for stats in [self.daily_stats, self.hourly_stats, self.stats_4h, self.stats_12h]:
             stats["closed"] += 1
             stats["pnl"] += pnl
             if pnl >= 0:
                 stats["wins"] += 1
+                stats["total_win_pnl"] += pnl
             else:
                 stats["losses"] += 1
+                stats["total_loss_pnl"] += pnl
             if reason in stats["exit_reasons"]:
                 stats["exit_reasons"][reason] += 1
 
@@ -73,6 +80,14 @@ class TelegramBot:
             else:
                 eco["losses"] += 1
 
+            cs = stats["coin_stats"].setdefault(symbol, {"closed": 0, "wins": 0, "losses": 0, "pnl": 0.0})
+            cs["closed"] += 1
+            cs["pnl"] += pnl
+            if pnl >= 0:
+                cs["wins"] += 1
+            else:
+                cs["losses"] += 1
+
             if pnl > stats["best_pnl"]:
                 stats["best_pnl"] = pnl
                 stats["best_coin"] = symbol
@@ -81,7 +96,7 @@ class TelegramBot:
                 stats["worst_coin"] = symbol
 
     def record_skip(self):
-        for stats in [self.daily_stats, self.hourly_stats, self.stats_6h, self.stats_12h]:
+        for stats in [self.daily_stats, self.hourly_stats, self.stats_4h, self.stats_12h]:
             stats["skipped"] += 1
 
     def send(self, text):
@@ -405,7 +420,7 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
         pct = (pnl / balance * 100) if balance > 0 else 0
 
         eco_lines = []
-        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
+        for name in ["kirmizi", "mavi"]:
             eco = stats["ecosystem_stats"].get(name, {})
             oc = open_counts.get(name, 0)
             closed = eco.get("closed", 0)
@@ -434,29 +449,33 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
         self.send(msg)
         self.reset_stats(self.hourly_stats)
 
-    def send_6h_report(self, balance, open_counts):
-        stats = self.stats_6h
+    def send_4h_report(self, balance, open_counts):
+        stats = self.stats_4h
         pnl = stats["pnl"]
         pct = (pnl / balance * 100) if balance > 0 else 0
         total_open = sum(open_counts.values())
+        total_closed = stats["closed"]
+        winrate = (stats["wins"] / total_closed * 100) if total_closed > 0 else 0
 
-        best = f"🏆 En İyi:   {stats['best_coin']}  +%{abs(stats['best_pnl']):.2f}" if stats["best_coin"] else ""
-        worst = f"💔 En Kötü:  {stats['worst_coin']}  -%{abs(stats['worst_pnl']):.2f}" if stats["worst_coin"] else ""
+        best = f"🏆 En İyi:   {stats['best_coin']}  +{format_usdt(stats['best_pnl'])} USDT" if stats["best_coin"] else ""
+        worst = f"💔 En Kötü:  {stats['worst_coin']}  {format_usdt(stats['worst_pnl'])} USDT" if stats["worst_coin"] else ""
 
-        eco_table = self._build_eco_table(stats, open_counts, show_winpct=False)
-        eco_pnl = self._build_eco_pnl(stats)
+        eco_table = self._build_eco_table(stats, open_counts, show_winpct=True)
+        eco_pnl = self._build_eco_pnl(stats, show_icon=True)
 
-        msg = f"""📊 6 SAATLİK RAPOR
+        msg = f"""📊 4 SAATLİK RAPOR
 🕐 {now_str()}
 
 💰 Bakiye:        {format_usdt(balance)} USDT
-📈 6 Saatlik PnL: {"+"if pnl>=0 else ""}{format_usdt(pnl)} USDT  |  {"+"if pct>=0 else ""}%{abs(pct):.2f}
+📈 4 Saatlik PnL: {"+"if pnl>=0 else ""}{format_usdt(pnl)} USDT  |  {"+"if pct>=0 else ""}%{abs(pct):.2f}
 
 📌 Açık Pozisyonlar: {total_open}
 
-🔁 Son 6 Saatte:
+🔁 Son 4 Saatte:
   ● Açılan:   {stats['opened']}
-  ● Kapanan:  {stats['closed']}
+  ● Kapanan:  {total_closed}
+  ● Kazanan:  {stats['wins']}  |  Kaybeden: {stats['losses']}
+  ● Winrate:  %{winrate:.0f}
   ● Atlanan:  {stats['skipped']}
 
 {best}
@@ -466,7 +485,7 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
 
 {eco_pnl}"""
         self.send(msg)
-        self.reset_stats(self.stats_6h)
+        self.reset_stats(self.stats_4h)
 
     def send_12h_report(self, balance, open_counts):
         stats = self.stats_12h
@@ -508,50 +527,126 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
     def send_24h_report(self, balance, open_counts):
         stats = self.daily_stats
         pnl = stats["pnl"]
+        commission = stats["commission"]
+        net_pnl = pnl - commission
         start_bal = stats.get("start_balance", balance - pnl)
-        pct = (pnl / start_bal * 100) if start_bal > 0 else 0
+        bal_delta = balance - start_bal
+        bal_pct = (bal_delta / start_bal * 100) if start_bal > 0 else 0
+        pnl_pct = (pnl / start_bal * 100) if start_bal > 0 else 0
         total_open = sum(open_counts.values())
         total_closed = stats["closed"]
         winrate = (stats["wins"] / total_closed * 100) if total_closed > 0 else 0
+        avg_pnl = pnl / total_closed if total_closed > 0 else 0
+        avg_win = stats["total_win_pnl"] / stats["wins"] if stats["wins"] > 0 else 0
+        avg_loss = stats["total_loss_pnl"] / stats["losses"] if stats["losses"] > 0 else 0
 
-        best = f"🏆 En İyi:   {stats['best_coin']}  {"+"if stats['best_pnl']>=0 else ""}{format_usdt(stats['best_pnl'])} USDT" if stats["best_coin"] else ""
-        worst = f"💔 En Kötü:  {stats['worst_coin']}  {"+"if stats['worst_pnl']>=0 else ""}{format_usdt(stats['worst_pnl'])} USDT" if stats["worst_coin"] else ""
-
-        eco_table = self._build_eco_table(stats, open_counts, show_winpct=True)
-        eco_pnl = self._build_eco_pnl(stats, show_icon=True)
-        exit_dist = self._build_exit_distribution(stats, show_pct=True)
-
-        msg = f"""📊 24 SAATLİK RAPOR
+        # ── Bölüm 1: Bakiye & PnL ──
+        sign = "+" if pnl >= 0 else ""
+        bsign = "+" if bal_delta >= 0 else ""
+        msg1 = f"""📊 24 SAATLİK RAPOR
 🕐 {now_str()}
 
-💰 Başlangıç Bakiye:  {format_usdt(start_bal)} USDT
-💰 Bitiş Bakiye:      {format_usdt(balance)} USDT
-📈 Günlük PnL:        {"+"if pnl>=0 else ""}{format_usdt(pnl)} USDT  |  {"+"if pct>=0 else ""}%{abs(pct):.2f}
+━━━━━━ BAKİYE ━━━━━━
+  Başlangıç:  {format_usdt(start_bal)} USDT
+  Bitiş:      {format_usdt(balance)} USDT
+  Değişim:    {bsign}{format_usdt(bal_delta)} USDT  ({bsign}%{abs(bal_pct):.2f})
 
-📌 Gün İçinde:
-  ● Açılan:    {stats['opened']}
-  ● Kapanan:   {stats['closed']}
-  ● Atlanan:   {stats['skipped']}
-  ● Açık Kalan: {total_open}
+━━━━━━ PNL ANALİZİ ━━━━━━
+  Brüt PnL:        {sign}{format_usdt(pnl)} USDT  ({sign}%{abs(pnl_pct):.2f})
+  Toplam Komisyon: -{format_usdt(commission)} USDT
+  Net PnL:         {"+"if net_pnl>=0 else ""}{format_usdt(net_pnl)} USDT
+  İşlem Başına:    {"+"if avg_pnl>=0 else ""}{format_usdt(avg_pnl)} USDT
 
-{best}
-{worst}
+━━━━━━ KAZANÇ / KAYIP ━━━━━━
+  Toplam Kazanç:  +{format_usdt(stats['total_win_pnl'])} USDT  ({stats['wins']} işlem)
+  Toplam Kayıp:   {format_usdt(stats['total_loss_pnl'])} USDT  ({stats['losses']} işlem)
+  Ort. Kazanç:    +{format_usdt(avg_win)} USDT
+  Ort. Kayıp:     {format_usdt(avg_loss)} USDT
 
-{eco_table}
+━━━━━━ İŞLEM SAYILARI ━━━━━━
+  Açılan:      {stats['opened']}
+  Kapanan:     {total_closed}
+  Kazanan:     {stats['wins']}  (%{winrate:.0f})
+  Kaybeden:    {stats['losses']}
+  Atlanan:     {stats['skipped']}
+  Açık Kalan:  {total_open}"""
 
-{eco_pnl}
+        # ── Bölüm 2: Thread detayı ──
+        thread_lines = []
+        for name in ["kirmizi", "mavi"]:
+            eco = stats["ecosystem_stats"].get(name, {})
+            ec = eco.get("closed", 0)
+            ew = eco.get("wins", 0)
+            el = eco.get("losses", 0)
+            ep = eco.get("pnl", 0.0)
+            ewr = (ew / ec * 100) if ec > 0 else 0
+            esign = "+" if ep >= 0 else ""
+            icon = ecosystem_emoji(name)
+            dn = ecosystem_display_name(name)
+            oc = open_counts.get(name, 0)
+            thread_lines.append(
+                f"  {icon} {dn}:\n"
+                f"    Açılan: {eco.get('opened',0)}  |  Kapanan: {ec}  |  Açık: {oc}\n"
+                f"    Kazanan: {ew}  |  Kaybeden: {el}  |  Winrate: %{ewr:.0f}\n"
+                f"    PnL: {esign}{format_usdt(ep)} USDT"
+            )
 
-{exit_dist}
+        msg2 = "\n━━━━━━ THREAD DETAYI ━━━━━━\n" + "\n\n".join(thread_lines)
 
-💸 Toplam Komisyon: {format_usdt(stats['commission'])} USDT
-🏅 Genel Winrate:   %{winrate:.0f}  ({stats['wins']}W / {stats['losses']}L)"""
-        self.send(msg)
+        # ── Bölüm 3: En iyi / en kötü coinler ──
+        coin_stats = stats.get("coin_stats", {})
+        if coin_stats:
+            sorted_coins = sorted(coin_stats.items(), key=lambda x: x[1]["pnl"], reverse=True)
+            top_n = min(5, len(sorted_coins))
+            best_lines = []
+            for i, (sym, cs) in enumerate(sorted_coins[:top_n], 1):
+                cwr = (cs["wins"] / cs["closed"] * 100) if cs["closed"] > 0 else 0
+                csign = "+" if cs["pnl"] >= 0 else ""
+                best_lines.append(f"  {i}. {sym}  {csign}{format_usdt(cs['pnl'])} USDT  ({cs['closed']} işlem, %{cwr:.0f})")
+            worst_lines = []
+            if len(sorted_coins) > top_n:
+                for i, (sym, cs) in enumerate(sorted_coins[-top_n:], 1):
+                    csign = "+" if cs["pnl"] >= 0 else ""
+                    worst_lines.append(f"  {i}. {sym}  {csign}{format_usdt(cs['pnl'])} USDT  ({cs['closed']} işlem)")
+            coin_section = "\n━━━━━━ EN İYİ COİNLER ━━━━━━\n" + "\n".join(best_lines)
+            if worst_lines:
+                coin_section += "\n\n━━━━━━ EN KÖTÜ COİNLER ━━━━━━\n" + "\n".join(worst_lines)
+        else:
+            coin_section = ""
+
+        # ── Bölüm 4: Çıkış dağılımı ──
+        exit_dist = "\n" + self._build_exit_distribution(stats, show_pct=True)
+
+        # ── Bölüm 5: En iyi / en kötü tek işlem ──
+        trade_footer = ""
+        if stats["best_coin"]:
+            bpsign = "+" if stats["best_pnl"] >= 0 else ""
+            wpsign = "+" if stats["worst_pnl"] >= 0 else ""
+            trade_footer = (
+                f"\n━━━━━━ TEK İŞLEM REKORLARI ━━━━━━\n"
+                f"  🏆 En İyi:   {stats['best_coin']}  {bpsign}{format_usdt(stats['best_pnl'])} USDT\n"
+                f"  💔 En Kötü:  {stats['worst_coin']}  {wpsign}{format_usdt(stats['worst_pnl'])} USDT"
+            )
+
+        full_msg = msg1 + msg2 + coin_section + exit_dist + trade_footer
+
+        # Telegram 4096 karakter limitine böl
+        for chunk_start in range(0, len(full_msg), 4000):
+            chunk = full_msg[chunk_start:chunk_start + 4000]
+            if chunk_start > 0:
+                cut = chunk.rfind("\n")
+                if cut > 0:
+                    self.send(full_msg[chunk_start:chunk_start + cut])
+                    chunk_start += cut
+                    continue
+            self.send(chunk)
+
         self.reset_stats(self.daily_stats)
 
     def _build_eco_table(self, stats, open_counts, show_winpct=False):
         header = "📊 Ekosistem Detayı:\n"
         lines = []
-        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
+        for name in ["kirmizi", "mavi"]:
             eco = stats["ecosystem_stats"].get(name, {})
             oc = open_counts.get(name, 0)
             opened = eco.get("opened", 0)
@@ -568,7 +663,7 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
 
     def _build_eco_pnl(self, stats, show_icon=False):
         lines = ["💰 Ekosistem PnL:"]
-        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
+        for name in ["kirmizi", "mavi"]:
             eco = stats["ecosystem_stats"].get(name, {})
             epnl = eco.get("pnl", 0.0)
             sign = "+" if epnl >= 0 else ""
@@ -581,14 +676,29 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
     def _build_exit_distribution(self, stats, show_pct=False):
         reasons = stats["exit_reasons"]
         total = sum(reasons.values())
+        labels = {
+            "stop_loss":     "Stop Loss",
+            "take_profit":   "Take Profit",
+            "chandelier":    "Chandelier",
+            "renk_degisimi": "Renk Değişimi",
+            "ust_dis_bant":  "Üst Diş Bant",
+            "alt_dis_bant":  "Alt Diş Bant",
+            "alt_winrate":   "Alt Winrate",
+            "ust_winrate":   "Üst Winrate",
+            "kar_al":        "Kâr Al (%5)",
+        }
         lines = ["🏅 Çıkış Dağılımı:"]
-        for r in ["Winrate", "Lose Exit", "Chandelier"]:
-            count = reasons.get(r, 0)
+        for key, label in labels.items():
+            count = reasons.get(key, 0)
+            if count == 0:
+                continue
             if show_pct and total > 0:
                 pct = count / total * 100
-                lines.append(f"  ● {r}:    {count}  |  %{pct:.0f}")
+                lines.append(f"  ● {label}:  {count}  |  %{pct:.0f}")
             else:
-                lines.append(f"  ● {r}:    {count}")
+                lines.append(f"  ● {label}:  {count}")
+        if len(lines) == 1:
+            lines.append("  (henüz kapanan işlem yok)")
         return "\n".join(lines)
 
     # === TELEGRAM KOMUTLARI ===
@@ -634,7 +744,7 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
         total = sum(oc.values())
 
         eco_lines = []
-        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
+        for name in ["kirmizi", "mavi"]:
             eco = self.daily_stats["ecosystem_stats"].get(name, {})
             epnl = eco.get("pnl", 0.0)
             sign = "+" if epnl >= 0 else ""
@@ -672,7 +782,7 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
         last_data = info.get("last_data_ago", -1)
 
         eco_lines = []
-        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
+        for name in ["kirmizi", "mavi"]:
             active = eco_states.get(name, False)
             icon = "✅" if active else "⛔"
             count = oc.get(name, 0)
@@ -710,11 +820,8 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
         positions = self.bot_manager.get_all_positions()
 
         groups = [
-            ("beyaz",   ["beyaz"]),
-            ("sari",    ["sari"]),
-            ("siyah",   ["siyah"]),
-            ("altin",   ["altin"]),
             ("kirmizi", ["kirmizi"]),
+            ("mavi",    ["mavi"]),
         ]
 
         by_eco = {}
@@ -787,55 +894,77 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
         self._reply(chat_id, msg[:4096])
 
     def cmd_rapor(self, chat_id, args):
+        if not self.bot_manager:
+            return
+
+        balance = self.bot_manager.get_balance()
+        open_positions = self.bot_manager.get_all_positions()
+        open_counts = {}
+        open_pnl_total = 0.0
+        for p in open_positions:
+            eco = p.get("ecosystem", "")
+            open_counts[eco] = open_counts.get(eco, 0) + 1
+            open_pnl_total += p.get("pnl", 0)
+
+        total_open = sum(open_counts.values())
+
+        msg = f"📊 PERFORMANS RAPORU\n🕐 {now_str()}\n"
+        msg += f"\n💰 Bakiye: {format_usdt(balance)} USDT"
+        msg += f"\n📌 Açık: {total_open} pozisyon"
+        if total_open > 0:
+            op_sign = "+" if open_pnl_total >= 0 else ""
+            msg += f"  ({op_sign}{format_usdt(open_pnl_total)} USDT)"
+        msg += "\n"
+
+        for name in ["kirmizi", "mavi"]:
+            cnt = open_counts.get(name, 0)
+            if cnt > 0:
+                msg += f"  {ecosystem_emoji(name)} {ecosystem_display_name(name)}: {cnt} açık\n"
+
         periods = [
             ("1 SAAT",  self.hourly_stats),
-            ("6 SAAT",  self.stats_6h),
+            ("4 SAAT",  self.stats_4h),
             ("12 SAAT", self.stats_12h),
             ("24 SAAT", self.daily_stats),
         ]
-        groups = [
-            ["beyaz"],
-            ["sari"],
-            ["siyah"],
-            ["altin"],
-            ["kirmizi"],
-        ]
-
-        msg = f"📊 PERFORMANS RAPORU\n🕐 {now_str()}\n"
 
         for label, stats in periods:
             total_closed = stats["closed"]
-            total_pnl = stats["pnl"]
-            pnl_sign = "+" if total_pnl >= 0 else ""
-            msg += f"\n{'─'*12} {label} {'─'*12}\n"
-            msg += f"📦 {total_closed} kapandı  💰 {pnl_sign}{format_usdt(total_pnl)} USDT\n"
+            pnl = stats["pnl"]
+            commission = stats["commission"]
+            net_pnl = pnl - commission
+            wins = stats["wins"]
+            losses = stats["losses"]
+            winrate = (wins / total_closed * 100) if total_closed > 0 else 0
+            pnl_sign = "+" if pnl >= 0 else ""
+            net_sign = "+" if net_pnl >= 0 else ""
 
-            has_any = False
-            for threads in groups:
-                for eco in threads:
-                    eco_s = stats["ecosystem_stats"].get(eco, {})
-                    closed = eco_s.get("closed", 0)
-                    if closed == 0:
-                        continue
-                    wins = eco_s.get("wins", 0)
-                    losses = eco_s.get("losses", 0)
-                    epnl = eco_s.get("pnl", 0.0)
-                    sign = "+" if epnl >= 0 else ""
-                    icon = "✅" if epnl >= 0 else "❌"
-                    has_any = True
-                    msg += (f"  {ecosystem_emoji(eco)} {ecosystem_display_name(eco)}:"
-                            f"  {closed}  {wins}W/{losses}L"
-                            f"  {sign}{format_usdt(epnl)} USDT  {icon}\n")
+            msg += f"\n{'━'*11} {label} {'━'*11}\n"
+            msg += f"  📦 {total_closed} kapandı  |  {wins}W / {losses}L  (%{winrate:.0f})\n"
+            msg += f"  💰 Brüt: {pnl_sign}{format_usdt(pnl)} USDT\n"
+            if commission > 0:
+                msg += f"  💸 Net:  {net_sign}{format_usdt(net_pnl)} USDT  (kom: -{format_usdt(commission)})\n"
 
-            if not has_any:
+            for name in ["kirmizi", "mavi"]:
+                eco_s = stats["ecosystem_stats"].get(name, {})
+                closed = eco_s.get("closed", 0)
+                if closed == 0:
+                    continue
+                ew = eco_s.get("wins", 0)
+                el = eco_s.get("losses", 0)
+                ep = eco_s.get("pnl", 0.0)
+                ewr = (ew / closed * 100) if closed > 0 else 0
+                esign = "+" if ep >= 0 else ""
+                icon = "✅" if ep >= 0 else "❌"
+                msg += (f"  {ecosystem_emoji(name)} {ecosystem_display_name(name)}:"
+                        f"  {closed} işlem  {ew}W/{el}L  %{ewr:.0f}"
+                        f"  {esign}{format_usdt(ep)} USDT  {icon}\n")
+
+            if total_closed == 0:
                 msg += "  (bu sürede işlem yok)\n"
 
-        if len(msg) <= 4096:
-            self._reply(chat_id, msg)
-        else:
-            cut = msg.rfind("\n", 0, 4096)
-            self._reply(chat_id, msg[:cut])
-            self._reply(chat_id, msg[cut:8192])
+        for i in range(0, len(msg), 4000):
+            self._reply(chat_id, msg[i:i+4000])
 
     def cmd_pozisyonlar(self, chat_id, args):
         if not self.bot_manager:
@@ -888,7 +1017,7 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
 
     def cmd_ekosistem_durdur(self, chat_id, args):
         if not args:
-            self._reply(chat_id, "Kullanım: /ekosistem_durdur [ad]\nÖrnek: /ekosistem_durdur siyah")
+            self._reply(chat_id, "Kullanım: /ekosistem_durdur [ad]\nÖrnek: /ekosistem_durdur kirmizi")
             return
         name = args[0].lower()
         self._reply(chat_id,
@@ -919,7 +1048,7 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
         if not info:
             self._reply(chat_id, "❌ Bakiye alınamadı.")
             return
-        margin_per = info["total"] * 0.02
+        margin_per = info["total"] * 0.05
         oc = self.bot_manager.get_status_info().get("open_counts", {})
         total = sum(oc.values())
         msg = f"""💰 BAKİYE
@@ -929,7 +1058,7 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
 📐 Kullanılan Marjin: {format_usdt(info['used'])} USDT
 💵 Serbest Bakiye:    {format_usdt(info['available'])} USDT
 
-🎯 İşlem başına marjin: {format_usdt(margin_per)} USDT (%2)
+🎯 İşlem başına marjin: {format_usdt(margin_per)} USDT (%5)
 📌 Açık Pozisyon: {total}"""
         self._reply(chat_id, msg)
 
@@ -943,7 +1072,7 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
         wr = (self.daily_stats["wins"] / self.daily_stats["closed"] * 100) if self.daily_stats["closed"] > 0 else 0
 
         eco_lines = []
-        for name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
+        for name in ["kirmizi", "mavi"]:
             eco = self.daily_stats["ecosystem_stats"].get(name, {})
             epnl = eco.get("pnl", 0.0)
             sign = "+" if epnl >= 0 else ""
@@ -1008,7 +1137,7 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
             by_eco.setdefault(eco, []).append(f)
 
         msg = f"🚩 AÇIK FLAGLER\n🕐 {now_str()}\n\nToplam: {len(flags)} flag\n"
-        for eco_name in ["beyaz", "sari", "siyah", "altin", "kirmizi"]:
+        for eco_name in ["kirmizi", "mavi"]:
             if eco_name not in by_eco:
                 continue
             eco_flags = by_eco[eco_name]
@@ -1017,10 +1146,8 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
                     f"  ({len(eco_flags)} flag)\n")
             for f in eco_flags:
                 elapsed = time.time() - f.get("time", time.time())
-                msg += f"\n  {f['symbol']}  {f['flag_name']}\n  🕐 {format_duration(elapsed)} önce"
-                if "extra" in f:
-                    msg += f"\n  🔁 {f['extra']}"
-                msg += "\n"
+                direction = f.get("direction", "—")
+                msg += f"\n  {f['symbol']}  {direction.upper()}\n  🕐 {format_duration(elapsed)} önce\n"
         self._reply(chat_id, msg[:4096])
 
     def cmd_iptal(self, chat_id, args):
@@ -1117,7 +1244,7 @@ Tüm ilgili işlemler takibinden kaldırıldı."""
 🌿 Ekosistem Komutları:
   /ekosistem_durdur [ad] — Ekosistemi durdur
   /ekosistem_baslat [ad] — Ekosistemi başlat
-  Ekosistem adları: beyaz, sari, siyah
+  Ekosistem adları: kirmizi, mavi
 
 ❌ /iptal — Bekleyen onayı iptal et"""
         self._reply(chat_id, msg)

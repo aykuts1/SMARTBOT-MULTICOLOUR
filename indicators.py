@@ -199,98 +199,54 @@ def detect_crossover_up(fast, slow, index):
     return fast[index - 1] <= slow[index - 1] and fast[index] > slow[index]
 
 
-def compute_all_indicators(candles, config):
+def compute_all_indicators(candles, config=None):
     if not candles or len(candles) < 2:
         return {}
 
     closes = [c["close"] for c in candles]
     highs = [c["high"] for c in candles]
     lows = [c["low"] for c in candles]
+    n = len(closes)
 
-    result = {}
+    cfg = (config or {}).get("indicators", {})
+    ema21_period  = cfg.get("ema21_periyot",   21)
+    ema50_period  = cfg.get("ema50_periyot",   50)
+    atr_period    = cfg.get("atr_periyot",     14)
+    tooth_mult    = cfg.get("dis_carpan",       1.0)
+    winrate_mult  = cfg.get("winrate_carpan",   6.0)
 
-    ema_period = config.get("beyaz", {}).get("ema_periyodu", 48)
-    atr_period = config.get("beyaz", {}).get("atr_periyodu", 48)
-    ema_main = calc_ema(closes, ema_period)
-    atr_main = calc_atr(highs, lows, closes, atr_period)
-    result["ema_main"] = ema_main
-    result["atr_main"] = atr_main
+    ema21 = calc_ema(closes, ema21_period)
+    ema50 = calc_ema(closes, ema50_period)
+    atr14 = calc_atr(highs, lows, closes, atr_period)
 
-    beyaz = config.get("beyaz", {})
-    k_line, d_line = calc_stochastic(
-        highs, lows, closes,
-        beyaz.get("stokastik_k_length", 50),
-        beyaz.get("stokastik_k_smoothing", 21),
-        beyaz.get("stokastik_d", 8)
-    )
-    result["stoch_k"] = k_line
-    result["stoch_d"] = d_line
+    center_line  = [0.0] * n
+    center_color = [""]  * n
+    upper_tooth  = [0.0] * n
+    lower_tooth  = [0.0] * n
+    upper_winrate = [0.0] * n
+    lower_winrate = [0.0] * n
 
-    macd_line, signal_line, histogram = calc_macd(
-        closes,
-        beyaz.get("macd_hizli", 21),
-        beyaz.get("macd_yavas", 50),
-        beyaz.get("macd_signal", 9)
-    )
-    result["macd"] = macd_line
-    result["macd_signal"] = signal_line
-    result["macd_hist"] = histogram
+    for i in range(n):
+        if ema21[i] > 0 and ema50[i] > 0:
+            cl = (ema21[i] + ema50[i]) / 2.0
+            center_line[i]   = cl
+            center_color[i]  = "green" if ema21[i] > cl else "red"
+            upper_tooth[i]   = cl + tooth_mult   * atr14[i]
+            lower_tooth[i]   = cl - tooth_mult   * atr14[i]
+            upper_winrate[i] = cl + winrate_mult * atr14[i]
+            lower_winrate[i] = cl - winrate_mult * atr14[i]
 
-    sari = config.get("sari", {})
-    bb_upper, bb_middle, bb_lower = calc_bollinger(
-        closes,
-        sari.get("bollinger_periyot", 20),
-        sari.get("bollinger_sapma", 2)
-    )
-    result["bb_upper"] = bb_upper
-    result["bb_middle"] = bb_middle
-    result["bb_lower"] = bb_lower
-
-    siyah = config.get("siyah", {})
-    dc_upper, dc_lower = calc_donchian(
-        highs, lows,
-        siyah.get("donchian_periyodu", 50)
-    )
-    result["dc_upper"] = dc_upper
-    result["dc_lower"] = dc_lower
-
-    altin = config.get("altin", {})
-    kdj_k, kdj_d, kdj_j = calc_kdj(
-        highs, lows, closes,
-        altin.get("kdj_periyot", 9),
-        altin.get("kdj_k_smooth", 3),
-        altin.get("kdj_d_smooth", 3)
-    )
-    result["kdj_k"] = kdj_k
-    result["kdj_d"] = kdj_d
-    result["kdj_j"] = kdj_j
-
-    kc_upper, kc_middle, kc_lower = calc_keltner(
-        closes, highs, lows,
-        altin.get("keltner_ema_periyot", 200),
-        altin.get("keltner_atr_periyot", 200),
-        altin.get("keltner_carpan", 1.0)
-    )
-    result["kc_upper"] = kc_upper
-    result["kc_middle"] = kc_middle
-    result["kc_lower"] = kc_lower
-
-    kirmizi = config.get("kirmizi", {})
-    kc_red_upper, kc_red_middle, kc_red_lower, kc_red_outer_upper, kc_red_outer_lower = calc_keltner_with_outer(
-        closes, highs, lows,
-        kirmizi.get("keltner_ema_periyot", 48),
-        kirmizi.get("keltner_atr_periyot", 48),
-        kirmizi.get("keltner_carpan", 1.0),
-        kirmizi.get("keltner_dis_carpan", 1.5)
-    )
-    result["kc_red_upper"] = kc_red_upper
-    result["kc_red_middle"] = kc_red_middle
-    result["kc_red_lower"] = kc_red_lower
-    result["kc_red_outer_upper"] = kc_red_outer_upper
-    result["kc_red_outer_lower"] = kc_red_outer_lower
-
-    result["closes"] = closes
-    result["highs"] = highs
-    result["lows"] = lows
-
-    return result
+    return {
+        "ema21":         ema21,
+        "ema50":         ema50,
+        "center_line":   center_line,
+        "center_color":  center_color,
+        "atr14":         atr14,
+        "upper_tooth":   upper_tooth,
+        "lower_tooth":   lower_tooth,
+        "upper_winrate": upper_winrate,
+        "lower_winrate": lower_winrate,
+        "closes":        closes,
+        "highs":         highs,
+        "lows":          lows,
+    }
