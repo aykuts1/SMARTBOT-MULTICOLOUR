@@ -64,13 +64,29 @@ class Telegram:
 
 
 def _format(event: str, **kw) -> str:
+    if event == "bot_started":
+        balance = kw.get("balance")
+        balance_str = f"{balance:.2f} USDT" if balance is not None else "okunamadi (API baglantisini kontrol et)"
+        return (f"🤖 <b>Bot Baslatildi</b>\n"
+                f"Takip edilen coin: {kw['symbol_count']}\n"
+                f"Bakiye: {balance_str}\n"
+                f"Kaldirac: {kw['leverage']}x\n"
+                f"Pozisyon buyuklugu: bakiyenin %{kw['position_size_pct']:.1f}'i\n"
+                f"Max pozisyon: {kw['max_positions']}\n"
+                f"Loss Exit: %{kw['loss_exit_pct']:.1f}\n"
+                f"Kar esigi (renk-flip/TP): %{kw['profit_threshold_pct']:.2f}")
+
     if event == "position_opened":
+        margin = kw["margin_usdt"]
+        notional = kw["notional_usdt"]
+        leverage_display = f"{notional / margin:.0f}x" if margin else "-"
         return (f"🟢 <b>Pozisyon Acildi</b>\n"
                 f"Coin: {kw['symbol']}\n"
                 f"Yon: {kw['side'].upper()}\n"
                 f"Giris: {kw['entry_price']:.6g}\n"
                 f"Miktar: {kw['qty']:.6g}\n"
-                f"Marj: {kw['margin_usdt']:.2f} USDT")
+                f"Marj: {margin:.2f} USDT\n"
+                f"Hacim: {notional:.2f} USDT ({leverage_display})")
 
     if event == "position_closed":
         sign = "🟩" if kw["pnl_pct"] >= 0 else "🟥"
