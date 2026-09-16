@@ -4,13 +4,16 @@ position_manager.py
 - SlotManager: 16 toplam slot / coin basina 1 pozisyon kuralini yonetir (saf mantik, test edilebilir).
 - calc_position_size: guncel bakiyenin %5'i uzerinden, borsanin qty_step'ine
   yuvarlanmis pozisyon buyuklugunu hesaplar (saf mantik, test edilebilir).
+  Yuvarlama Decimal ile yapilir -- ham float bolme/carpma (ornegin
+  178.60000000000002 gibi) borsanin "Qty invalid" ile reddettigi kirli
+  ondalik degerler uretebiliyor, Decimal bunu onler.
 - open_position / close_position: yukaridaki mantigi gercek borsa (exchange.py)
   ve kalici durum (state.py) ile birlestirir. Bu kisim canli API baglantisi
   gerektirdigi icin sadece gercek ortamda dogrulanabilir.
 """
 
-import math
 import time
+from decimal import Decimal, ROUND_DOWN
 
 import indicators as ind
 import signals as sig
@@ -51,11 +54,21 @@ def calc_position_size(balance: float, pct: float, price: float,
     price: giris anindaki piyasa fiyati (qty hesaplamak icin)
     qty_step: borsanin bu sembol icin izin verdigi minimum miktar adimi
     leverage: kaldirac (varsayilan 20x)
+
+    qty, qty_step'in tam kati olacak sekilde ASAGI yuvarlanir. Bu islem
+    Decimal ile yapilir -- ham float aritmetigi (raw_qty / qty_step * qty_step)
+    bazen 178.6 yerine 178.60000000000002 gibi kirli bir sonuc uretebiliyor,
+    bu da borsa tarafinda "Qty invalid" hatasina yol aciyordu.
     """
     margin_usdt = balance * (pct / 100.0)
     notional_usdt = margin_usdt * leverage
     raw_qty = notional_usdt / price
-    qty = math.floor(raw_qty / qty_step) * qty_step
+
+    qty_step_dec = Decimal(str(qty_step))
+    raw_qty_dec = Decimal(str(raw_qty))
+    steps = (raw_qty_dec / qty_step_dec).to_integral_value(rounding=ROUND_DOWN)
+    qty = float(steps * qty_step_dec)
+
     return {
         "margin_usdt": margin_usdt,
         "notional_usdt": notional_usdt,
@@ -110,7 +123,7 @@ def open_position(exchange, state, cfg, symbol: str, side: str,
     state.add_position(position)
 
     if notify_fn:
-        notify_fn("position_opened", **position)
+        notify_fn("position_opened", notional_usdt=sized["notional_usdt"], **position)
 
     return position
 
