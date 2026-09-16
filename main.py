@@ -95,9 +95,22 @@ def candle_close_loop(exchange: exch.Exchange, state: st.State, slots: pm.SlotMa
                     continue
 
                 newest_start = int(df["start"].iloc[-1])
+
+                # Bu sembolu bu bot calismasinda ILK KEZ goruyoruz -- yani su an
+                # (bot yeni baslatilmis/redeploy edilmis olabilir, saatin ortasinda
+                # olabiliriz). Bu durumda "yeni mum kapandi" varsayip hemen sinyal
+                # degerlendirmesi YAPMIYORUZ -- sadece referans olarak kaydediyoruz.
+                # Gercek giris/cikis degerlendirmesi ancak BIR SONRAKI gercek mum
+                # kapanisinda (newest_start bu kayitli degerden farklilastiginda)
+                # baslar.
+                first_seen = symbol not in last_seen_start
+
                 if last_seen_start.get(symbol) == newest_start:
                     continue  # yeni mum kapanmamis
                 last_seen_start[symbol] = newest_start
+
+                if first_seen:
+                    continue  # ilk gorulen mum -- bu bir "kapanis olayi" degil, sadece baslangic referansi
 
                 out = ind.compute_all(df, cfg)
                 closed_row = out.iloc[-2]  # -1 = hala olusan mum, -2 = SON KAPANAN mum
@@ -210,8 +223,22 @@ def main() -> None:
     telegram = tg.Telegram()
     slots = pm.SlotManager(max_total=cfg["max_positions"])
 
-    telegram.send_message(f"🤖 Bot baslatildi. Takip edilen {len(cfg['symbols'])} coin, "
-                           f"kaldirac {cfg['leverage']}x, max {cfg['max_positions']} pozisyon.")
+    try:
+        starting_balance = exchange.get_available_balance()
+    except Exception as e:
+        logger.warning("Baslangic bakiyesi cekilemedi: %s", e)
+        starting_balance = None
+
+    telegram.notify(
+        "bot_started",
+        symbol_count=len(cfg["symbols"]),
+        balance=starting_balance,
+        leverage=cfg["leverage"],
+        max_positions=cfg["max_positions"],
+        position_size_pct=cfg["position_size_pct"],
+        loss_exit_pct=cfg["loss_exit_pct"],
+        profit_threshold_pct=cfg["profit_threshold_pct"],
+    )
 
     reconcile_positions(exchange, state, telegram)
     for symbol in state.all_positions():
