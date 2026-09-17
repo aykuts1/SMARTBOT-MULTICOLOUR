@@ -10,6 +10,10 @@ seri olarak hesaplanir (bir onceki muma gore yukari/asagi); EMA/ALMA/ATR'yi
 etkilemez. (Onceki surumde bu is icin Heikin Ashi kullaniliyordu, artik
 tamamen kaldirildi.)
 
+TREND: ALMA9'un EMA50'ye gore konumuyla belirlenir (ALMA9 > EMA50 -> long,
+ALMA9 < EMA50 -> short). EMA21 artik trend hesabinda kullanilmiyor, sadece
+EGIM (slope) hesabinda kullaniliyor.
+
 Girdi: pandas DataFrame, kolonlar = ['open', 'high', 'low', 'close'] (zaman
 sirasina gore artan, en son satir = en son kapanan mum).
 """
@@ -100,20 +104,20 @@ def compute_all(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """
     out = df.copy()
 
-    out["ema_fast"] = ema(out["close"], cfg["ema_fast_length"])   # EMA21
+    out["ema_fast"] = ema(out["close"], cfg["ema_fast_length"])   # EMA21 -- sadece EGIM icin kullanilir
     out["ema_slow"] = ema(out["close"], cfg["ema_slow_length"])   # EMA50
-
-    # trend: fast > slow -> long, fast < slow -> short
-    out["trend"] = np.where(out["ema_fast"] > out["ema_slow"], "long",
-                     np.where(out["ema_fast"] < out["ema_slow"], "short", "neutral"))
-
-    # egim: EMA21'in bir onceki muma gore yonu
-    prev_fast = out["ema_fast"].shift(1)
-    out["slope"] = np.where(out["ema_fast"] > prev_fast, "long",
-                     np.where(out["ema_fast"] < prev_fast, "short", "neutral"))
 
     out["atr"] = atr(out, cfg["atr_length"])
     out["alma"] = alma(out["close"], cfg["alma_length"], cfg["alma_offset"], cfg["alma_sigma"])
+
+    # trend: ALMA9, EMA50'nin ustundeyse -> long, altindaysa -> short
+    out["trend"] = np.where(out["alma"] > out["ema_slow"], "long",
+                     np.where(out["alma"] < out["ema_slow"], "short", "neutral"))
+
+    # egim: EMA21'in bir onceki muma gore yonu (degismedi)
+    prev_fast = out["ema_fast"].shift(1)
+    out["slope"] = np.where(out["ema_fast"] > prev_fast, "long",
+                     np.where(out["ema_fast"] < prev_fast, "short", "neutral"))
 
     for mult in cfg["band_multipliers"]:
         tag = str(mult).replace(".", "_")
