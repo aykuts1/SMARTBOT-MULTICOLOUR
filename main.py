@@ -4,12 +4,11 @@ main.py
 Botun giris noktasi. Uc bagimsiz dongu paralel calisir (thread):
 
   1) candle_close_loop  -> her ~30 saniyede kontrol eder, yeni bir 1 saatlik
-     mum kapandiginda: giris sinyali, ters-sinyal (piyasa sartlari tamamen
-     degisti -> kapat+ters yonde ac) kontrolu, trend-flip cikisi, T3
-     renk-flip kar kontrolu, mum-kapanis-zarar kontrolu ve hareketli TP
-     bandi guncellemesi burada yapilir. Ayrica bu dongu, her tam mum-kapanis
-     turunda kendi kayitlarini (state.json) Bybit'teki gercek acik
-     pozisyonlarla IKI YONLU senkronize eder (bkz. sync_with_exchange).
+     mum kapandiginda: giris sinyali, trend-flip cikisi, T3 renk-flip kar
+     kontrolu, mum-kapanis-zarar kontrolu ve hareketli TP bandi guncellemesi
+     burada yapilir. Ayrica bu dongu, her tam mum-kapanis turunda kendi
+     kayitlarini (state.json) Bybit'teki gercek acik pozisyonlarla IKI YONLU
+     senkronize eder (bkz. sync_with_exchange).
   2) risk_loop           -> her 3 saniyede TUM sembollerin fiyatini TEK
      cagriyla ceker; acik pozisyonlar icin Loss Exit ve (hareketli) ALMA TP
      bandi kontrolunu yapar.
@@ -18,6 +17,12 @@ Botun giris noktasi. Uc bagimsiz dongu paralel calisir (thread):
 
 Baslarken state.json, Bybit'teki gercek acik pozisyonlarla karsilastirilip
 senkronize edilir (sync_with_exchange, is_startup=True).
+
+NOT: Coin basina sadece 1 pozisyon kurali kesin -- acik pozisyon varken
+karsi yonde sinyal olusursa bile pozisyon zorla kapatilip ters yonde
+acilmaz. Yeni pozisyon ancak mevcut olan normal bir cikis kuraliyla
+(Loss Exit, TP, trend-flip, mum-kapanis-zarar, renk-flip-kar) kapandiktan
+SONRA acilabilir.
 """
 
 import logging
@@ -155,21 +160,11 @@ def candle_close_loop(exchange: exch.Exchange, state: st.State, slots: pm.SlotMa
                 closed_row = out.iloc[-2]  # -1 = hala olusan mum, -2 = SON KAPANAN mum
 
                 position = state.get_position(symbol)
-                reverse_side = None  # ters-sinyal tetiklendiyse hangi yonde yeniden acilacagini tasir
 
                 if position is not None:
                     current_price = exchange.get_last_price(symbol)
                     reason = None
-
-                    # ONCELIKLI kontrol: piyasa sartlari tamamen degisti mi?
-                    # (acik pozisyonun TAM TERSI yonde tam bir giris sinyali olustu mu)
-                    # Bu, diger cikis kurallarinin tetiklenmesini beklemeden tek
-                    # basina kapatma nedenidir.
-                    triggered_reverse = sig.check_reverse_signal(position["side"], closed_row)
-                    if triggered_reverse is not None:
-                        reason = "reverse_signal"
-                        reverse_side = triggered_reverse
-                    elif sig.check_trend_flip_exit(position["side"], closed_row["trend"]):
+                    if sig.check_trend_flip_exit(position["side"], closed_row["trend"]):
                         reason = "trend_flip"
                     elif sig.check_candle_close_loss_exit(position["side"], position["entry_price"],
                                                            closed_row["close"], cfg["candle_close_loss_pct"]):
@@ -187,9 +182,7 @@ def candle_close_loop(exchange: exch.Exchange, state: st.State, slots: pm.SlotMa
                         pm.update_tp_band(state, symbol, closed_row, cfg)
 
                 if position is None:
-                    # ters-sinyal kapatmasi zaten hangi yone acilacagini biliyor;
-                    # aksi halde normal giris sinyaline bakiliyor
-                    side = reverse_side if reverse_side is not None else sig.check_entry_signal(closed_row)
+                    side = sig.check_entry_signal(closed_row)
                     if side is not None:
                         if slots.can_open(symbol):
                             new_pos = pm.open_position(exchange, state, cfg, symbol, side,
