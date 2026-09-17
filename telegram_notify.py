@@ -92,8 +92,7 @@ def _format(event: str, **kw) -> str:
         sign = "🟩" if kw["pnl_pct"] >= 0 else "🟥"
         reason_map = {"loss_exit": "Loss Exit", "take_profit": "ALMA TP",
                       "trend_flip": "Trend Degisimi", "color_flip_profit": "Renk Donusu / Kar",
-                      "candle_close_loss": "Mum Kapanis Zarar",
-                      "reverse_signal": "Ters Sinyal / Yon Degisimi"}
+                      "candle_close_loss": "Mum Kapanis Zarar"}
         return (f"{sign} <b>Pozisyon Kapandi</b>\n"
                 f"Coin: {kw['symbol']}\n"
                 f"Yon: {kw['side'].upper()}\n"
