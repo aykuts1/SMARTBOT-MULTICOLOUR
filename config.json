@@ -3,7 +3,7 @@
     "APTUSDT", "CHZUSDT", "ENAUSDT", "TRUMPUSDT", "ETHUSDT",
     "SOLUSDT", "BTCUSDT", "WLDUSDT", "TRXUSDT", "SUIUSDT"
   ],
-  "ema_fast_length": 21,
+  "ema_fast_length": 14,
   "ema_slow_length": 50,
   "atr_length": 14,
   "alma_length": 9,
