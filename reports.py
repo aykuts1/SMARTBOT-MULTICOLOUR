@@ -23,7 +23,6 @@ REASON_LABELS = {
     "trend_flip": "Trend Degisimi",
     "color_flip_profit": "T3 Renk Donusu / Kar",
     "candle_close_loss": "Mum Kapanis Zarar",
-    "reverse_signal": "Ters Sinyal / Yon Degisimi",
 }
 
 
