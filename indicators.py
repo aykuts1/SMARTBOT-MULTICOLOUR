@@ -1,160 +1,181 @@
-"""
-indicators.py
--------------
-Strateji icin gereken tum indikator hesaplamalari: EMA21/EMA50, ALMA9 + 6 bant
-(1.5 / 2 / 3 x ATR14), ATR14, ve Tilson T3.
+//@version=5
+strategy("Trend + ALMA9 + Tilson T3 Strategy",
+     overlay=true,
+     initial_capital=1000,
+     default_qty_type=strategy.fixed,
+     currency=currency.USD,
+     commission_type=strategy.commission.percent,
+     commission_value=0.055,
+     pyramiding=0,
+     calc_on_every_tick=true)
 
-Tum bu hesaplamalar NORMAL (gercek) mum kapanislarindan yapilir.
-Tilson T3, sadece giris/cikis tetikleyici "renk" kontrolu icin ayri bir
-seri olarak hesaplanir (bir onceki muma gore yukari/asagi); EMA/ALMA/ATR'yi
-etkilemez. (Onceki surumde bu is icin Heikin Ashi kullaniliyordu, artik
-tamamen kaldirildi.)
+// =============================================================================
+// PARAMETRELER (config.json ile birebir ayni)
+// =============================================================================
+emaFastLen    = input.int(21, "EMA Fast (Trend + Egim) Length", group="EMA / Trend")
+emaSlowLen    = input.int(50, "EMA Slow Length", group="EMA / Trend")
 
-TREND: ALMA9'un EMA50'ye gore konumuyla belirlenir (ALMA9 > EMA50 -> long,
-ALMA9 < EMA50 -> short). EMA21 artik trend hesabinda kullanilmiyor, sadece
-EGIM (slope) hesabinda kullaniliyor.
+almaLen       = input.int(9, "ALMA Length", group="ALMA")
+almaOffset    = input.float(0.85, "ALMA Offset", step=0.01, group="ALMA")
+almaSigma     = input.float(6.0, "ALMA Sigma", step=0.1, group="ALMA")
 
-Girdi: pandas DataFrame, kolonlar = ['open', 'high', 'low', 'close'] (zaman
-sirasina gore artan, en son satir = en son kapanan mum).
-"""
+atrLen        = input.int(14, "ATR Length", group="ATR / Bantlar")
+band1Mult     = input.float(1.5, "Bant Carpani 1", group="ATR / Bantlar")
+band2Mult     = input.float(2.0, "Bant Carpani 2", group="ATR / Bantlar")
+band3Mult     = input.float(3.0, "Bant Carpani 3", group="ATR / Bantlar")
 
-import numpy as np
-import pandas as pd
+t3Period      = input.int(2, "T3 Period", group="Tilson T3")
+t3Factor      = input.float(0.7, "T3 Factor", step=0.01, group="Tilson T3")
 
+positionSizePct    = input.float(8.0, "Pozisyon Buyuklugu % (bakiyenin)", group="Risk / Boyutlandirma")
+leverage           = input.float(20.0, "Kaldirac", group="Risk / Boyutlandirma")
+lossExitPct        = input.float(5.75, "Loss Exit % (surekli)", group="Cikis Esikleri")
+candleCloseLossPct = input.float(4.0, "Mum Kapanis Zarar %", group="Cikis Esikleri")
+profitThreshPct    = input.float(0.10, "Kar Esigi % (renk-flip / TP bandi)", step=0.01, group="Cikis Esikleri")
 
-# ---------------------------------------------------------------------------
-# EMA (Exponential Moving Average)
-# ---------------------------------------------------------------------------
-def ema(series: pd.Series, length: int) -> pd.Series:
-    """adjust=False -> Wilder tarzi, TradingView'deki ta.ema ile tutarli sonuc verir."""
-    return series.ewm(span=length, adjust=False).mean()
+// =============================================================================
+// HESAPLAMALAR
+// =============================================================================
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+almaVal = ta.alma(close, almaLen, almaOffset, almaSigma)   // sadece TP bantlari icin
+atrVal  = ta.atr(atrLen)
 
+// Trend: EMA21, EMA50'ye gore (eski mantiga donuldu)
+trendLong  = emaFast > emaSlow
+trendShort = emaFast < emaSlow
 
-# ---------------------------------------------------------------------------
-# ATR (Average True Range) - Wilder smoothing (TradingView ta.atr ile ayni)
-# ---------------------------------------------------------------------------
-def atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
-    high, low, close = df["high"], df["low"], df["close"]
-    prev_close = close.shift(1)
-    tr = pd.concat(
-        [
-            high - low,
-            (high - prev_close).abs(),
-            (low - prev_close).abs(),
-        ],
-        axis=1,
-    ).max(axis=1)
-    # Wilder's RMA = ewm with alpha = 1/length, adjust=False
-    return tr.ewm(alpha=1.0 / length, adjust=False).mean()
+slopeLong  = emaFast > emaFast[1]
+slopeShort = emaFast < emaFast[1]
 
+almaUpper1 = almaVal + atrVal * band1Mult
+almaLower1 = almaVal - atrVal * band1Mult
+almaUpper2 = almaVal + atrVal * band2Mult
+almaLower2 = almaVal - atrVal * band2Mult
+almaUpper3 = almaVal + atrVal * band3Mult
+almaLower3 = almaVal - atrVal * band3Mult
 
-# ---------------------------------------------------------------------------
-# ALMA (Arnaud Legoux Moving Average) - orijinal/standart parametreler
-# ---------------------------------------------------------------------------
-def alma(series: pd.Series, length: int = 9, offset: float = 0.85, sigma: float = 6.0) -> pd.Series:
-    """
-    Standart ALMA agirliklari onceden hesaplanip rolling pencereye uygulanir.
-    offset=0.85, sigma=6 -> TradingView'in orijinal/varsayilan ALMA ayarlari.
-    """
-    m = offset * (length - 1)
-    s = length / sigma
-    idx = np.arange(length)
-    weights = np.exp(-((idx - m) ** 2) / (2 * s * s))
-    weights /= weights.sum()
+b  = t3Factor
+c1 = -b*b*b
+c2 = 3*b*b + 3*b*b*b
+c3 = -6*b*b - 3*b - 3*b*b*b
+c4 = 1 + 3*b + b*b*b + 3*b*b
 
-    def _weighted(window: np.ndarray) -> float:
-        return float(np.dot(window, weights))
+e1 = ta.ema(close, t3Period)
+e2 = ta.ema(e1, t3Period)
+e3 = ta.ema(e2, t3Period)
+e4 = ta.ema(e3, t3Period)
+e5 = ta.ema(e4, t3Period)
+e6 = ta.ema(e5, t3Period)
+t3 = c1*e6 + c2*e5 + c3*e4 + c4*e3
 
-    return series.rolling(window=length).apply(_weighted, raw=True)
+t3Green = t3 > t3[1]
+t3Red   = t3 < t3[1]
 
+longSignal  = t3Green and trendLong  and slopeLong
+shortSignal = t3Red   and trendShort and slopeShort
 
-# ---------------------------------------------------------------------------
-# Tilson T3 - giris/cikis renk tetikleyicisi (Heikin Ashi'nin yerine)
-# ---------------------------------------------------------------------------
-def tilson_t3(series: pd.Series, length: int = 2, factor: float = 0.7) -> pd.Series:
-    """
-    Standart Tilson T3: 6 kat ust uste EMA'nin agirlikli birlesimi.
-    factor (b) = 0.7, length = 2 -> kullanicinin verdigi Pine kodundaki
-    varsayilan degerlerle birebir ayni.
-    """
-    b = factor
-    c1 = -b ** 3
-    c2 = 3 * b ** 2 + 3 * b ** 3
-    c3 = -6 * b ** 2 - 3 * b - 3 * b ** 3
-    c4 = 1 + 3 * b + b ** 3 + 3 * b ** 2
+// En yakin ALMA bandi -- entryPx'e gore secilir
+nearestLowerBand(entryPx) =>
+    float belowMax = na
+    if almaLower1 < entryPx
+        belowMax := na(belowMax) ? almaLower1 : math.max(belowMax, almaLower1)
+    if almaLower2 < entryPx
+        belowMax := na(belowMax) ? almaLower2 : math.max(belowMax, almaLower2)
+    if almaLower3 < entryPx
+        belowMax := na(belowMax) ? almaLower3 : math.max(belowMax, almaLower3)
+    na(belowMax) ? math.min(math.min(almaLower1, almaLower2), almaLower3) : belowMax
 
-    e1 = ema(series, length)
-    e2 = ema(e1, length)
-    e3 = ema(e2, length)
-    e4 = ema(e3, length)
-    e5 = ema(e4, length)
-    e6 = ema(e5, length)
+nearestUpperBand(entryPx) =>
+    float aboveMin = na
+    if almaUpper1 > entryPx
+        aboveMin := na(aboveMin) ? almaUpper1 : math.min(aboveMin, almaUpper1)
+    if almaUpper2 > entryPx
+        aboveMin := na(aboveMin) ? almaUpper2 : math.min(aboveMin, almaUpper2)
+    if almaUpper3 > entryPx
+        aboveMin := na(aboveMin) ? almaUpper3 : math.min(aboveMin, almaUpper3)
+    na(aboveMin) ? math.max(math.max(almaUpper1, almaUpper2), almaUpper3) : aboveMin
 
-    return c1 * e6 + c2 * e5 + c3 * e4 + c4 * e3
+// =============================================================================
+// POZISYON TAKIBI
+// =============================================================================
+var float entryPriceRec = na
+var float tpBandRec     = na
 
+inLong  = strategy.position_size > 0
+inShort = strategy.position_size < 0
+prevSide = inLong ? "long" : inShort ? "short" : na
 
-# ---------------------------------------------------------------------------
-# Hepsini bir arada hesapla
-# ---------------------------------------------------------------------------
-def compute_all(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
-    """
-    df: ['open','high','low','close'] kolonlu, zaman artan sirali OHLC verisi.
-    cfg: config.json'dan gelen strateji parametreleri.
-    Donen DataFrame orijinal kolonlara ek olarak tum indikatorleri icerir.
-    """
-    out = df.copy()
+trendFlipHit = (prevSide == "short" and trendLong) or (prevSide == "long" and trendShort)
 
-    out["ema_fast"] = ema(out["close"], cfg["ema_fast_length"])   # EMA21 -- sadece EGIM icin kullanilir
-    out["ema_slow"] = ema(out["close"], cfg["ema_slow_length"])   # EMA50
+candleCloseLossHit = prevSide == "short" ? (close - entryPriceRec) / entryPriceRec * 100.0 >= candleCloseLossPct :
+     prevSide == "long" ? (entryPriceRec - close) / entryPriceRec * 100.0 >= candleCloseLossPct : false
 
-    out["atr"] = atr(out, cfg["atr_length"])
-    out["alma"] = alma(out["close"], cfg["alma_length"], cfg["alma_offset"], cfg["alma_sigma"])
+colorFlipProfitHit = prevSide == "short" and t3Green ? (entryPriceRec - close) / entryPriceRec * 100.0 >= profitThreshPct :
+     prevSide == "long" and t3Red ? (close - entryPriceRec) / entryPriceRec * 100.0 >= profitThreshPct : false
 
-    # trend: ALMA9, EMA50'nin ustundeyse -> long, altindaysa -> short
-    out["trend"] = np.where(out["alma"] > out["ema_slow"], "long",
-                     np.where(out["alma"] < out["ema_slow"], "short", "neutral"))
+// =============================================================================
+// GIRIS / CIKIS EMIRLERI (mum kapanisinda)
+// =============================================================================
+qty = strategy.equity * (positionSizePct / 100.0) * leverage / close
 
-    # egim: EMA21'in bir onceki muma gore yonu (degismedi)
-    prev_fast = out["ema_fast"].shift(1)
-    out["slope"] = np.where(out["ema_fast"] > prev_fast, "long",
-                     np.where(out["ema_fast"] < prev_fast, "short", "neutral"))
+if barstate.isconfirmed
+    if inShort or inLong
+        if trendFlipHit
+            strategy.close_all(comment="trend_flip")
+        else if candleCloseLossHit
+            strategy.close_all(comment="candle_close_loss")
+        else if colorFlipProfitHit
+            strategy.close_all(comment="color_flip_profit")
+        else
+            tpBandRec := inShort ? nearestLowerBand(entryPriceRec) : nearestUpperBand(entryPriceRec)
 
-    for mult in cfg["band_multipliers"]:
-        tag = str(mult).replace(".", "_")
-        out[f"alma_upper_{tag}"] = out["alma"] + out["atr"] * mult
-        out[f"alma_lower_{tag}"] = out["alma"] - out["atr"] * mult
+    if strategy.position_size == 0
+        if longSignal
+            strategy.entry("Long", strategy.long, qty=qty, comment="entry_long")
+            entryPriceRec := close
+            tpBandRec := nearestUpperBand(close)
+        else if shortSignal
+            strategy.entry("Short", strategy.short, qty=qty, comment="entry_short")
+            entryPriceRec := close
+            tpBandRec := nearestLowerBand(close)
 
-    # Tilson T3 + renk (bir onceki muma gore yukari -> yesil/long, asagi -> kirmizi/short)
-    out["t3"] = tilson_t3(out["close"], cfg["t3_period"], cfg["t3_factor"])
-    prev_t3 = out["t3"].shift(1)
-    out["t3_color"] = np.where(out["t3"] > prev_t3, "green",
-                        np.where(out["t3"] < prev_t3, "red", "neutral"))
+// =============================================================================
+// SUREKLI (intrabar) KONTROLLER -- Loss Exit ve ALMA TP bandi
+// =============================================================================
+if strategy.position_size != 0
+    stopPrice = inLong ? entryPriceRec * (1 - lossExitPct / 100.0) : entryPriceRec * (1 + lossExitPct / 100.0)
 
-    return out
+    bandProfitPct = inLong ? (tpBandRec - entryPriceRec) / entryPriceRec * 100.0 :
+                              (entryPriceRec - tpBandRec) / entryPriceRec * 100.0
+    tpArmed = not na(tpBandRec) and bandProfitPct >= profitThreshPct
 
+    if inLong
+        strategy.exit("TP/SL Long", from_entry="Long", stop=stopPrice, limit=tpArmed ? tpBandRec : na, comment_loss="loss_exit", comment_profit="take_profit")
+    if inShort
+        strategy.exit("TP/SL Short", from_entry="Short", stop=stopPrice, limit=tpArmed ? tpBandRec : na, comment_loss="loss_exit", comment_profit="take_profit")
 
-def nearest_band(row: pd.Series, cfg: dict, side: str, entry_price: float) -> float:
-    """
-    side='short' -> giris fiyatinin ALTINDAKI en yakin ALT ALMA bandi (TP hedefi)
-    side='long'  -> giris fiyatinin USTUNDEKI en yakin UST ALMA bandi (TP hedefi)
-    Bu fonksiyon her mum kapanisinda yeniden cagrilir (hareketli hedef) --
-    entry_price sadece "hangi bandin en yakin oldugunu" belirlemek icin sabit
-    referans olarak kullanilir, bandin KENDI DEGERI o anki (guncel) mum satirindan
-    (row) okunur.
-    """
-    multipliers = sorted(cfg["band_multipliers"])
-    candidates = []
-    for mult in multipliers:
-        tag = str(mult).replace(".", "_")
-        if side == "short":
-            candidates.append(row[f"alma_lower_{tag}"])
-        else:
-            candidates.append(row[f"alma_upper_{tag}"])
+// =============================================================================
+// BASARILI / BASARISIZ ISLEM BOYAMA (giris-cikis mumlari arasi)
+// =============================================================================
+var int paintedTrades = 0
 
-    if side == "short":
-        # entry'nin altinda kalan bantlar arasinda entry'ye EN YAKIN (en buyuk) olani
-        below = [c for c in candidates if c < entry_price]
-        return max(below) if below else min(candidates)
-    else:
-        above = [c for c in candidates if c > entry_price]
-        return min(above) if above else max(candidates)
+if strategy.closedtrades > paintedTrades
+    for i = paintedTrades to strategy.closedtrades - 1
+        entryBar    = strategy.closedtrades.entry_bar_index(i)
+        exitBar     = strategy.closedtrades.exit_bar_index(i)
+        entryPx     = strategy.closedtrades.entry_price(i)
+        exitPx      = strategy.closedtrades.exit_price(i)
+        tradeProfit = strategy.closedtrades.profit(i)
+        boxColor = tradeProfit > 0 ? color.new(color.green, 80) : color.new(color.red, 80)
+        box.new(left=entryBar, right=exitBar, top=math.max(entryPx, exitPx), bottom=math.min(entryPx, exitPx),
+             bgcolor=boxColor, border_color=boxColor, xloc=xloc.bar_index)
+    paintedTrades := strategy.closedtrades
+
+// =============================================================================
+// CIZIM
+// =============================================================================
+plot(emaFast, "EMA21 (Trend + Egim)", color=color.gray)
+plot(emaSlow, "EMA50", color=color.orange)
+plot(almaVal, "ALMA9 (TP referans)", color=color.blue, linewidth=2)
+plot(t3, "Tilson T3", color=t3Green ? color.green : color.red, linewidth=2)
