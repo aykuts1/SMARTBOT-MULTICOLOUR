@@ -6,7 +6,7 @@ disaridan veri alir, karar dondurur, yan etkisi yoktur. Bu sayede gercek
 borsa baglantisi olmadan test edilebilirler.
 
 MUM KAPANISINDA degerlendirilenler: giris sinyali, trend-flip cikisi,
-T3 renk-flip kar kontrolu, mum kapanis bazli zarar kontrolu.
+T3 renk-flip kar kontrolu, mum kapanis bazli zarar kontrolu, ters-sinyal kontrolu.
 SUREKLI (3 saniyede bir) degerlendirilenler: TP bandi ve Loss Exit --
 bunlar main.py / risk.py tarafinda anlik fiyatla cagrilir.
 """
@@ -118,6 +118,24 @@ def check_tp_exit(position_side: str, current_price: float, band_price: float,
     return band_touched and band_profit_pct >= min_profit_pct
 
 
+def check_reverse_signal(position_side: str, row) -> str | None:
+    """
+    Sadece mum kapanisinda cagrilir. Acik pozisyonun TAM TERSI yonde tam bir
+    giris sinyali (T3 rengi + trend + egim uc sartin da uyusmasi) olustu mu
+    diye bakar -- bu, piyasa sartlarinin tamamen degistigi ozel bir durumdur.
+    Diger cikis kurallarinin (trend_flip, color_flip_profit, candle_close_loss)
+    tetiklenmesini beklemeden, tek basina pozisyonu kapatmak icin yeterlidir.
+
+    Donus: yeni (ters) yon ('short'/'long') eger tetiklendiyse, aksi halde None.
+    """
+    new_side = check_entry_signal(row)
+    if new_side is None:
+        return None
+    if new_side == position_side:
+        return None
+    return new_side
+
+
 def evaluate_close_position_exits(position: dict, row, current_price: float,
                                    loss_pct: float, profit_threshold_pct: float,
                                    candle_close_loss_pct: float) -> str | None:
@@ -128,6 +146,11 @@ def evaluate_close_position_exits(position: dict, row, current_price: float,
 
     Oncelik sirasi: once en kritik (stop-loss), sonra TP bandi, sonra trend-flip,
     sonra mum-kapanis-zarar, en son T3 renk-flip-kar.
+
+    NOT: Ters-sinyal kontrolu (check_reverse_signal) bu fonksiyonun disinda,
+    main.py -> candle_close_loop icinde ayrica ve ONCELIKLI olarak calisir --
+    cunku tetiklendiginde hem kapatma hem de ayni anda yeni yonde acma
+    islemini birlikte yapmasi gerekiyor.
     """
     side = position["side"]
     entry_price = position["entry_price"]
