@@ -9,7 +9,7 @@
   "alma_length": 9,
   "alma_offset": 0.85,
   "alma_sigma": 6.0,
-  "band_multipliers": [1.25, 2, 3],
+  "band_multipliers": [1.5, 2, 3],
 
   "t3_period": 2,
   "t3_factor": 0.7,
