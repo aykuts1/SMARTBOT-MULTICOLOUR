@@ -79,8 +79,10 @@ def check_entry(client, bot_state, symbol, df, prev_price, last_price):
     merkez_value = last_row["merkez"]
     t3_ust = last_row["t3_ust_bant"]
     t3_alt = last_row["t3_alt_bant"]
+    merkez_ust = last_row["merkez_ust_bant"]
+    merkez_alt = last_row["merkez_alt_bant"]
 
-    if any(v != v for v in [merkez_value, t3_ust, t3_alt]):  # NaN kontrolu
+    if any(v != v for v in [merkez_value, t3_ust, t3_alt, merkez_ust, merkez_alt]):  # NaN kontrolu
         return  # gostergeler henuz yeterli veriyle hesaplanamadi
 
     if prev_price is None:
@@ -107,13 +109,18 @@ def check_entry(client, bot_state, symbol, df, prev_price, last_price):
         notify.notify_slot_full(bot_state.total_open_count(), config.MAX_TOTAL_POSITIONS, symbol, side)
         return
 
-    open_position(client, bot_state, symbol, side, last_price, merkez_value, t3_ust, t3_alt)
+    open_position(client, bot_state, symbol, side, last_price, merkez_value,
+                   t3_ust, t3_alt, merkez_ust, merkez_alt)
 
 
-def open_position(client, bot_state, symbol, side, entry_price, merkez_value, t3_ust, t3_alt):
+def open_position(client, bot_state, symbol, side, entry_price, merkez_value,
+                   t3_ust, t3_alt, merkez_ust, merkez_alt):
     available_margin, equity = get_available_margin(client, bot_state)
 
-    band_price = t3_ust if side == "long" else t3_alt
+    # ONEMLI: lose exit mesafesi Merkez (ALMA) bandina gore hesaplanir,
+    # T3 bandina gore DEGIL. T3 bandi sadece yon (long/short) belirlemek
+    # icin kullanilir.
+    band_price = merkez_ust if side == "long" else merkez_alt
     max_leverage = client.get_max_leverage(symbol)
 
     result = sizing.calculate_position(
