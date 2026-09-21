@@ -12,6 +12,7 @@ kontrol edilmistir, ama canli paraya gecmeden ONCE mutlaka testnet
 """
 
 import time
+from decimal import Decimal
 import pandas as pd
 from pybit.unified_trading import HTTP
 
@@ -148,10 +149,23 @@ class BybitClient:
         return self._qty_step_cache.get(symbol, 0.001)
 
     def round_qty(self, symbol: str, qty: float) -> float:
+        """Miktari, coin'in izin verdigi adim buyuklugune (qty step) gore
+        asagi yuvarlar. Decimal ile hesaplanir: float ile dogrudan
+        carpip bolmek (ornegin 63 * 0.1) ikili tabanli yuvarlama hatasi
+        uretebiliyordu (6.3 yerine 6.300000000000001 gibi) - Bybit bu
+        fazladan basamagi gorunce 'Qty invalid' (10001) hatasi verip
+        emri reddediyordu. Decimal(str(...)) kullanmak bu sapmayi
+        tamamen ortadan kaldirir."""
         step = self.get_qty_step(symbol)
         if step <= 0:
             return qty
-        return max(step, (int(qty / step)) * step)
+        step_dec = Decimal(str(step))
+        qty_dec = Decimal(str(qty))
+        steps = int(qty_dec / step_dec)  # asagi yuvarlama (eskisiyle ayni yon)
+        rounded = steps * step_dec
+        if rounded < step_dec:
+            rounded = step_dec
+        return float(rounded)
 
     # ------------------------------------------------------------
     # KALDIRAC
