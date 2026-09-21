@@ -52,6 +52,8 @@ def main():
 
     # 5) Ana dongu
     prev_prices = {symbol: None for symbol in config.COINS}
+    indicator_cache = {}       # symbol -> gosterge hesaplanmis dataframe
+    last_indicator_refresh = {symbol: 0.0 for symbol in config.COINS}
     connection_lost = False
     last_success_time = time.time()
     reconcile_counter = 0
@@ -61,8 +63,20 @@ def main():
         loop_start = time.time()
         try:
             for symbol in config.COINS:
-                df = strategy.compute_indicators_for_symbol(client, symbol)
-                last_price = float(df.iloc[-1]["close"])
+                # Agir istek (300 mum cekme + gosterge hesaplama): sadece
+                # INDICATOR_REFRESH_SECONDS'te bir yenilenir.
+                now = time.time()
+                needs_refresh = (
+                    symbol not in indicator_cache
+                    or now - last_indicator_refresh[symbol] >= config.INDICATOR_REFRESH_SECONDS
+                )
+                if needs_refresh:
+                    indicator_cache[symbol] = strategy.compute_indicators_for_symbol(client, symbol)
+                    last_indicator_refresh[symbol] = now
+                df = indicator_cache[symbol]
+
+                # Hafif istek (tek fiyat): her saniye - "fiyat degdi mi" tetigi icin
+                last_price = client.get_last_price(symbol)
 
                 strategy.check_entry(client, bot_state, symbol, df, prev_prices[symbol], last_price)
                 strategy.check_exit(client, bot_state, symbol, df, last_price)
