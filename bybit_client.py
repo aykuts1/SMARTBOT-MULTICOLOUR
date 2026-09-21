@@ -93,10 +93,24 @@ class BybitClient:
         return self._qty_step_cache.get(symbol, 0.001)
 
     def round_qty(self, symbol: str, qty: float) -> float:
+        """Miktari, coin'in izin verdigi adima (step) yuvarlar.
+        Kayan nokta artiklarini (ornegin 146.20000000000002) da temizler,
+        yoksa Bybit 'Qty invalid' diye emri reddediyor."""
         step = self.get_qty_step(symbol)
         if step <= 0:
             return qty
-        return max(step, (int(qty / step)) * step)
+        steps = int(qty / step)
+        rounded = steps * step
+        decimals = self._decimals_for_step(step)
+        rounded = round(rounded, decimals)
+        return max(round(step, decimals), rounded)
+
+    @staticmethod
+    def _decimals_for_step(step: float) -> int:
+        step_str = f"{step:.10f}".rstrip("0")
+        if "." in step_str:
+            return len(step_str.split(".")[1])
+        return 0
 
     # ------------------------------------------------------------
     # KALDIRAC
