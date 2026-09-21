@@ -3,7 +3,7 @@
 Bybit Futures üzerinde çalışan, Tilson T3 ve "Merkez çizgisi" (ALMA)
 göstergelerine dayalı hedge-mod trading botu.
 
-## 1) Kurulum
+## 1) Kurulum 
 
 ```bash
 pip install -r requirements.txt
