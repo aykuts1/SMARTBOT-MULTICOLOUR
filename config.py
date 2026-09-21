@@ -47,6 +47,14 @@ KLINE_INTERVAL = "60"
 # (T3, 6 katmanli EMA oldugu icin gecmise biraz daha fazla veri lazim)
 KLINE_LOOKBACK = 300
 
+# Gostergeler (T3/Merkez/ATR) kac saniyede bir yeniden hesaplansin.
+# 1 saatlik mumlarda gosterge degeri saniye saniye degismez, bu yuzden
+# her saniye 300 mum cekmek gereksiz ve Bybit'in rate limitine takiliyor.
+# Anlik fiyat (touch tespiti icin) yine her saniye ayri ve hafif bir
+# istekle (get_last_price) kontrol edilir - sadece mum/gosterge verisi
+# bu araliktan daha sik tazelenmez.
+INDICATOR_REFRESH_SECONDS = 20
+
 # ============================================================
 # TILSON T3 AYARLARI
 # ============================================================
