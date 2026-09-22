@@ -10,8 +10,10 @@ icin kod icine yazilmaz). .env.example dosyasini kopyalayip .env yap ve
 kendi bilgilerini gir.
 
 NOT (koklu guncelleme): Bu dosyadaki eski Tilson T3 / Merkez (ALMA)
-gosterge ayarlari ve eski "lose exit" ayarlari tamamen kaldirildi.
-Strateji artik Supertrend + Entry/Exit cizgileri uzerine kurulu.
+gosterge ayarlari tamamen kaldirildi. Strateji artik Supertrend +
+Entry/Exit cizgileri uzerine kurulu. Eski botun sabit yuzdeli "lose
+exit" ayarlari da kaldirildi - yerine yeni, Entry-Exit mesafesine
+oranli bir lose exit geldi (asagida LOSE_EXIT_DISTANCE_MULT).
 """
 
 import os
@@ -65,6 +67,8 @@ EXIT_LINE_ATR_MULT = 2.4        # "Exit cizgisi" - TP tetigi (dinamik)
 # ============================================================
 EQUITY_PERCENT_PER_TRADE = 0.08   # toplam varligin yuzde kaci bir islem icin ayrilsin (%8, stake)
 SL_DISTANCE_MULT = 2.0            # borsadaki gercek SL, giris-exit cizgisi mesafesinin kac kati uzakta olsun
+LOSE_EXIT_DISTANCE_MULT = 1.5     # lose exit, giris-exit cizgisi mesafesinin kac kati uzakta olsun (TP'nin
+                                   # tersi yonde, TP'den DAHA UZAKTA - RR 1:1.5, TP mesafesi 100 ise lose exit 150)
 
 # ============================================================
 # ISLEM / RISK AYARLARI
