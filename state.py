@@ -33,7 +33,8 @@ class Position:
     side: str                # "long" / "short"
     position_idx: int        # 1 = long, 2 = short (hedge modu)
     entry_price: float
-    sl_price: float           # guvenlik SL - acilista sabitlenir, sonra degismez
+    sl_price: float            # guvenlik SL - acilista sabitlenir, sonra degismez
+    lose_exit_price: float     # lose exit - acilista sabitlenir, sonra degismez (RR 1:1.5)
     leverage: float
     allocated_amount: float
     qty: float
@@ -203,3 +204,25 @@ class BotState:
             except Exception as e:
                 print(f"[state] Sistem olaylari okunamadi: {e}")
                 self.system_events = []
+
+
+def reconstruct_lose_exit(entry_price: float, sl_price: float, side: str) -> float:
+    """Yeniden baslatmada: lose exit borsada saklanan bir deger degildir
+    (sadece guvenlik SL borsada gercek bir emir olarak durur), bu yuzden
+    restart sonrasi acik bir pozisyon bulundugunda lose exit seviyesi
+    guvenlik SL'den GERI HESAPLANIR.
+
+    Ikisi de ayni oranli formulden turedigi icin bu hesap tam isabetlidir:
+        SL mesafesi        = D * SL_DISTANCE_MULT
+        lose exit mesafesi = D * LOSE_EXIT_DISTANCE_MULT
+    yani:
+        lose exit mesafesi = SL mesafesi * (LOSE_EXIT_DISTANCE_MULT / SL_DISTANCE_MULT)
+    """
+    if not sl_price:
+        return 0.0
+    sl_distance = abs(entry_price - sl_price)
+    ratio = config.LOSE_EXIT_DISTANCE_MULT / config.SL_DISTANCE_MULT
+    lose_exit_distance = sl_distance * ratio
+    if side == "long":
+        return entry_price - lose_exit_distance
+    return entry_price + lose_exit_distance
