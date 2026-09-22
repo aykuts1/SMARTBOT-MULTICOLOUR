@@ -10,14 +10,18 @@ KOKLU GUNCELLEME - yeni strateji ozeti:
 - Yon: sadece o anki Supertrend yonunde islem acilir (long ya da short).
 - Giris: fiyat (saniyelik) Entry cizgisine degerse, Supertrend yonunde
   islem acilir.
-- Cikis 3 yoldan biriyle olur:
+- Cikis 4 yoldan biriyle olur:
     1) TP: fiyat (saniyelik) Exit cizgisine degerse pozisyon kapanir.
     2) Trend donusu: Supertrend yon degistirirse pozisyon kapanir - ama
        bu SADECE mum kapanisinda kontrol edilir (saniyelik degil).
-    3) Guvenlik SL: acilista sabitlenen, borsadaki gercek stop emri
-       tetiklenirse (bot cokerse/baglanti koparsa diye guvenlik agi).
+    3) Lose exit: acilista sabitlenen bir seviye - TP'nin ters yonunde,
+       TP mesafesinin 1.5 kati uzakta (RR 1:1.5). Fiyat (saniyelik) bu
+       seviyeye degerse pozisyon kapanir.
+    4) Guvenlik SL: acilista sabitlenen, borsadaki gercek stop emri
+       (TP mesafesinin 2 kati uzakta) tetiklenirse (bot cokerse/baglanti
+       koparsa diye guvenlik agi - normal kosullarda lose exit ondan
+       once devreye girer).
 - Her coin'de ayni anda en fazla 1 acik islem olabilir (long VEYA short).
-- Eski "lose exit" tamamen kaldirildi.
 
 NOT: Bu dosya Bybit'ten veri cekme/onbellekleme islerine karismaz - o is
 tamamen bybit_client.py'de (get_klines_cached). Bu dosya sadece o veriyi
@@ -87,16 +91,18 @@ def reconcile_open_positions(client, bot_state):
         if sl_price <= 0:
             print(f"[reconcile] {symbol} {side}: SL bulunamadi, sadece giris takip edilecek")
 
+        lose_exit_price = state_module.reconstruct_lose_exit(entry_price, sl_price, side)
+
         allocated_amount = (entry_price * qty) / leverage if leverage else 0.0
 
         pos = state_module.Position(
             symbol=symbol, side=side, position_idx=pos_idx,
-            entry_price=entry_price, sl_price=sl_price,
+            entry_price=entry_price, sl_price=sl_price, lose_exit_price=lose_exit_price,
             leverage=leverage, allocated_amount=allocated_amount, qty=qty,
         )
         bot_state.add_position(pos)
 
-        notify.notify_position_found_on_restart(symbol, side, entry_price, sl_price, leverage)
+        notify.notify_position_found_on_restart(symbol, side, entry_price, sl_price, lose_exit_price, leverage)
 
 
 # ------------------------------------------------------------
@@ -176,6 +182,7 @@ def open_position(client, bot_state, symbol, side, entry_price, exit_line_price)
     pos = state_module.Position(
         symbol=symbol, side=side, position_idx=position_idx,
         entry_price=entry_price, sl_price=result.sl_price,
+        lose_exit_price=result.lose_exit_price,
         leverage=result.applied_leverage, allocated_amount=result.allocated_amount,
         qty=qty, exit_line_at_entry=result.exit_line_price,
         entry_exit_percent=result.entry_exit_percent,
@@ -185,7 +192,7 @@ def open_position(client, bot_state, symbol, side, entry_price, exit_line_price)
 
     notify.notify_position_opened(
         symbol, side, entry_price, result.exit_line_price,
-        result.sl_price, result.applied_leverage,
+        result.lose_exit_price, result.sl_price, result.applied_leverage,
         result.allocated_amount, result.position_volume,
     )
 
@@ -199,7 +206,16 @@ def check_exit(client, bot_state, symbol, df, prev_price, last_price):
         return
 
     last_row = df.iloc[-1]
-    exit_line = float(last_row["exit_line"])
+    # ONEMLI: exit_line pozisyonun KENDI yonune gore secilir - o anki
+    # genel "trend" bayragina gore degil. Aksi halde mum kapanmadan
+    # (saniyelik veriyle) genel trend gecici olarak ters donerse, exit
+    # cizgisi karsi tarafin formulune gecer ve pozisyonun yonuyle
+    # uyusmayan bir seviye haline gelir - canli ortamda tam olarak bu
+    # yasandi (zararli bir kapanis "Take Profit" diye etiketlendi).
+    if pos.side == "long":
+        exit_line = float(last_row["long_exit_line"])
+    else:
+        exit_line = float(last_row["short_exit_line"])
 
     if exit_line != exit_line:  # NaN kontrolu
         return
@@ -208,8 +224,42 @@ def check_exit(client, bot_state, symbol, df, prev_price, last_price):
         return
 
     touched = (prev_price - exit_line) * (last_price - exit_line) <= 0
-    if touched:
+    if not touched:
+        return
+
+    # Ek guvenlik: "Take Profit" sadece GERCEKTEN kar/basabas durumunda
+    # tetiklenir. Normal kosullarda exit_line zaten hep fiyatin lehte
+    # tarafinda olur, ama olasi bir gosterge anomalisi (ornegin trend
+    # tam donus noktasindayken) yuzunden zararli bir "degme" olusursa,
+    # bu TP olarak kapatilmaz - pozisyon acik kalir ve trend-donusu ya
+    # da guvenlik SL mekanizmalarina birakilir.
+    if pos.side == "long":
+        favorable = last_price >= pos.entry_price
+    else:
+        favorable = last_price <= pos.entry_price
+
+    if favorable:
         close_position(client, bot_state, pos, last_price, "Take Profit")
+
+
+# ------------------------------------------------------------
+# LOSE EXIT KONTROLU (her saniye, anlik fiyatla - acilista sabitlenen seviye)
+# ------------------------------------------------------------
+def check_lose_exit(client, bot_state, symbol, prev_price, last_price):
+    pos = bot_state.get_position(symbol)
+    if not pos:
+        return
+
+    lose_exit_price = pos.lose_exit_price
+    if not lose_exit_price:
+        return
+
+    if prev_price is None:
+        return
+
+    touched = (prev_price - lose_exit_price) * (last_price - lose_exit_price) <= 0
+    if touched:
+        close_position(client, bot_state, pos, last_price, "Lose Exit")
 
 
 # ------------------------------------------------------------
