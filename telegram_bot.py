@@ -10,8 +10,8 @@ KOKLU GUNCELLEME:
 - Z/X/Q raporlari artik cok daha detayli: varlik gecmisine dayanarak
   onceki-donem varligi, gun ici/haftalik en yuksek-dusuk, drawdown,
   kazanma orani, en iyi/kotu islem, kapanis sebebi dagilimi vb. iceriyor.
-- /coinrapor ve /rapor{coinadi} artik Supertrend yonunu ve Entry/Exit
-  cizgisi seviyelerini de gosteriyor; eski "lose exit" alanlari kaldirildi.
+- /coinrapor ve /rapor{coinadi} artik Supertrend yonunu, Entry/Exit
+  cizgisi seviyelerini ve lose exit seviyesini gosteriyor.
 - Yeni komut: /coinperformans - her coin'in tum-zamanlar toplam
   islem/kar/zarar/kazanma orani ozeti.
 - Yuzdeler artik (kaldiracli getiri degil) ham fiyat degisim yuzdesi.
@@ -194,8 +194,12 @@ class ReportBuilder:
 
             tp_count = sum(1 for t in closed if t.get("reason") == "Take Profit")
             flip_count = sum(1 for t in closed if t.get("reason") == "Trend Dönüşü")
+            lose_count = sum(1 for t in closed if t.get("reason") == "Lose Exit")
             sl_count = sum(1 for t in closed if t.get("reason") == "Stop Loss")
-            parts.append(f"Kapanış sebebi dağılımı: Take Profit {tp_count} | Trend Dönüşü {flip_count} | Stop Loss {sl_count}")
+            parts.append(
+                f"Kapanış sebebi dağılımı: Take Profit {tp_count} | Trend Dönüşü {flip_count} | "
+                f"Lose Exit {lose_count} | Stop Loss {sl_count}"
+            )
 
         return "\n".join(parts)
 
@@ -277,9 +281,11 @@ class ReportBuilder:
         total_closed = len(closed) or 1
         tp_count = sum(1 for t in closed if t.get("reason") == "Take Profit")
         flip_count = sum(1 for t in closed if t.get("reason") == "Trend Dönüşü")
+        lose_count = sum(1 for t in closed if t.get("reason") == "Lose Exit")
         sl_count = sum(1 for t in closed if t.get("reason") == "Stop Loss")
         parts.append(f"- Take Profit: {tp_count} işlem (%{tp_count / total_closed * 100:.1f})")
         parts.append(f"- Trend Dönüşü: {flip_count} işlem (%{flip_count / total_closed * 100:.1f})")
+        parts.append(f"- Lose Exit: {lose_count} işlem (%{lose_count / total_closed * 100:.1f})")
         parts.append(f"- Stop Loss: {sl_count} işlem (%{sl_count / total_closed * 100:.1f})")
         parts.append("")
 
@@ -315,7 +321,7 @@ class ReportBuilder:
                 f"{emoji} {coin}/USDT — {yon}\n"
                 f"Giriş: {pos.entry_price:.4f} | Anlık: {last_price:.4f} | "
                 f"K/Z: {pnl:+.2f} USDT (%{pct:+.2f} fiyat değişimi)\n"
-                f"SL: {pos.sl_price:.4f} | Kaldıraç: {pos.leverage:.0f}x"
+                f"Lose exit: {pos.lose_exit_price:.4f} | SL: {pos.sl_price:.4f} | Kaldıraç: {pos.leverage:.0f}x"
             )
         return header + "\n\n" + "\n\n".join(blocks or ["(açık pozisyon yok)"])
 
@@ -409,6 +415,8 @@ class ReportBuilder:
             if pos.exit_line_at_entry:
                 exit_mesafe = (pos.exit_line_at_entry - pos.entry_price) / pos.entry_price * 100
                 parts.append(f"  Exit çizgisi (TP, açılış anı): {pos.exit_line_at_entry:.4f} (mesafe: %{exit_mesafe:+.2f})")
+            lose_mesafe = (pos.lose_exit_price - pos.entry_price) / pos.entry_price * 100
+            parts.append(f"  Lose exit: {pos.lose_exit_price:.4f} (mesafe: %{lose_mesafe:+.2f})")
             sl_mesafe = (pos.sl_price - pos.entry_price) / pos.entry_price * 100
             parts.append(f"  Güvenlik SL: {pos.sl_price:.4f} (mesafe: %{sl_mesafe:+.2f})")
             parts.append(
