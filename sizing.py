@@ -17,7 +17,17 @@ borsaya gercek stop-loss emri olarak koyulur. Bu seviye ACILISTA bir kez
 hesaplanir ve SABIT kalir - Exit cizgisi sonradan hareket etse bile SL
 guncellenmez.
 
-KOKLU GUNCELLEME: Eski "lose exit" mesafe/yuzde hesabi tamamen kaldirildi.
+Lose exit: yine ACILISTA bir kez hesaplanan, SABIT kalan bir seviye -
+TP'nin (Exit cizgisi mesafesinin) TERS yonunde, ama TP'den DAHA UZAKTA:
+mesafesi Entry-Exit mesafesinin 1.5 kati (RR 1:1.5 - TP mesafesi 100 ise
+lose exit mesafesi 150). Guvenlik SL'den (2 kati) DAHA YAKINDIR, yani
+normal kosullarda pozisyon once lose exit'te kapanir; borsadaki gercek
+SL sadece bot/baglanti koparsa diye bir guvenlik agi olarak kalir.
+
+KOKLU GUNCELLEME: Eski (T3/Merkez donemindeki) sabit yuzdeli "lose exit"
+hesabi tamamen kaldirildi. Yerine gelen yeni lose exit, Entry-Exit
+cizgisi mesafesine ORANLI (RR 1:1.5) ve acilista sabitlenen bir seviye -
+detay asagida.
 """
 
 from dataclasses import dataclass
@@ -32,7 +42,8 @@ class PositionSizeResult:
     exit_line_price: float             # acilis anindaki Exit cizgisi degeri
     entry_exit_distance: float         # fiyat cinsinden mesafe
     entry_exit_percent: float          # girise gore yuzde
-    sl_price: float                    # entry +/- 2x mesafe (sabit)
+    sl_price: float                    # entry +/- 2x mesafe (sabit) - guvenlik agi
+    lose_exit_price: float             # entry +/- 1.5x mesafe (sabit) - RR 1:1.5
     allocated_amount: float            # stake (varligin %8'i)
     calculated_leverage: float         # formulden cikan ham kaldirac
     applied_leverage: float            # coin limiti uygulandiktan sonraki kaldirac
@@ -64,6 +75,14 @@ def calculate_position(
     else:
         sl_price = entry_price + sl_distance
 
+    # 2b) Lose exit: guvenlik SL ile AYNI yonde ama daha yakin - Exit
+    #     mesafesinin 1.5 kati uzakta (sabit). RR 1:1.5.
+    lose_exit_distance = entry_exit_distance * config.LOSE_EXIT_DISTANCE_MULT
+    if side == "long":
+        lose_exit_price = entry_price - lose_exit_distance
+    else:
+        lose_exit_price = entry_price + lose_exit_distance
+
     # 3) Stake: toplam varligin %8'i
     allocated_amount = total_equity * config.EQUITY_PERCENT_PER_TRADE
 
@@ -91,6 +110,7 @@ def calculate_position(
         entry_exit_distance=entry_exit_distance,
         entry_exit_percent=entry_exit_percent,
         sl_price=sl_price,
+        lose_exit_price=lose_exit_price,
         allocated_amount=allocated_amount,
         calculated_leverage=calculated_leverage,
         applied_leverage=applied_leverage,
