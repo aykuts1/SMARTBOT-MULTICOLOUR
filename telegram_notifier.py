@@ -8,10 +8,10 @@ tum bildirim sablonlari.
 KOKLU GUNCELLEME:
 - "Entry cizgisine degdi" / "Exit cizgisine degdi" / "(Supertrend ...
   donuu)" gibi aciklayici ifadeler kaldirildi - sebep alani artik sade:
-  "Take Profit" / "Trend Dönüşü" / "Stop Loss".
+  "Take Profit" / "Trend Dönüşü" / "Lose Exit" / "Stop Loss".
 - Islem kapanisindaki yuzde artik kaldiracli getiri degil, HAM FIYAT
   DEGISIM YUZDESI olarak gosteriliyor ("fiyat değişimi" etiketiyle).
-- Lose exit alanlari tum sablonlardan kaldirildi.
+- Islem acilis bildirimi artik lose exit seviyesini de gosteriyor.
 """
 
 import time
@@ -60,8 +60,8 @@ def notify_bot_started(equity: float):
 # 2) ISLEM GIRISI
 # ============================================================
 def notify_position_opened(symbol: str, side: str, entry_price: float, exit_line_price: float,
-                            sl_price: float, leverage: float, allocated_amount: float,
-                            volume: float):
+                            lose_exit_price: float, sl_price: float, leverage: float,
+                            allocated_amount: float, volume: float):
     yon = "LONG" if side == "long" else "SHORT"
     emoji = "🔵" if side == "long" else "🔴"
     text = (
@@ -72,6 +72,7 @@ def notify_position_opened(symbol: str, side: str, entry_price: float, exit_line
         f"Stake: {allocated_amount:.2f} USDT (%{config.EQUITY_PERCENT_PER_TRADE*100:.0f})\n"
         f"Kaldıraç: {leverage:.0f}x\n"
         f"İşlem hacmi: {volume:.2f} USDT\n"
+        f"Lose exit: {lose_exit_price:.4f} USDT\n"
         f"Güvenlik SL: {sl_price:.4f} USDT\n"
         f"Saat: {_now_str()}"
     )
@@ -178,13 +179,14 @@ def notify_connection_restored(downtime_seconds: float):
 # 8) YENIDEN BASLATILDI - ACIK POZISYON BULUNDU
 # ============================================================
 def notify_position_found_on_restart(symbol: str, side: str, entry_price: float,
-                                      sl_price: float, leverage: float):
+                                      sl_price: float, lose_exit_price: float, leverage: float):
     yon = "Short" if side == "short" else "Long"
     text = (
         "🔄 *AÇIK POZİSYON BULUNDU — TAKİBE ALINDI*\n"
         f"Coin: {symbol.replace('USDT','')}/USDT\n"
         f"Yön: {yon}\n"
         f"Giriş fiyatı: {entry_price:.4f} USDT\n"
+        f"Lose exit: {lose_exit_price:.4f} USDT\n"
         f"Güvenlik SL: {sl_price:.4f} USDT\n"
         f"Kaldıraç: {leverage:.0f}x\n"
         f"Saat: {_now_str()}"
