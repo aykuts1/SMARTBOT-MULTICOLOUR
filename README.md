@@ -7,7 +7,7 @@ Bybit Futures üzerinde çalışan, **Supertrend** göstergesine ve ona bağlı
 > Eski gösterge (Tilson T3, Merkez/ALMA) ve eski "lose exit" mantığı
 > tamamen kaldırıldı, yerine bu belgede anlatılan yeni strateji geldi.
 
-## 1) Kurulum 
+## 1) Kurulum
 
 ```bash
 pip install -r requirements.txt
@@ -59,16 +59,24 @@ işlem açılır.
    sabitlenir (stake aynı kalır, hacim küçülür) ve Telegram'a ayrı bir
    bildirim gider.
 
-**Çıkış — üç yol:**
+**Çıkış — dört yol:**
 1. **TP:** Fiyat (her saniye, anlık) Exit çizgisini geçerse pozisyon
-   kapanır. Exit çizgisi dinamiktir, her mumda değişebilir.
+   kapanır. Exit çizgisi dinamiktir, her mumda değişebilir. Bu kontrol
+   **pozisyonun kendi yönüne** göre yapılır (genel Supertrend yönü mum
+   kapanmadan geçici olarak dönse bile), ve sadece gerçekten kâr/başabaş
+   durumunda "Take Profit" olarak kapatılır.
 2. **Trend dönüşü:** Supertrend yön değiştirirse pozisyon kapanır —
    ama bu **sadece mum kapanışında** kontrol edilir, saniyelik değil.
-3. **Güvenlik SL:** Giriş fiyatı ile o anki Exit çizgisi arasındaki
+3. **Lose exit:** Giriş anında bir kez hesaplanıp **sabit kalan** bir
+   seviye — TP'nin ters yönünde, TP mesafesinin **1,5 katı** uzakta
+   (RR 1:1,5 — TP mesafesi 100 ise lose exit mesafesi 150). Fiyat (her
+   saniye, anlık) bu seviyeye değerse pozisyon kapanır.
+4. **Güvenlik SL:** Giriş fiyatı ile o anki Exit çizgisi arasındaki
    mesafenin **2 katı**, borsaya gerçek stop-loss emri olarak konur.
-   Bu seviye açılışta bir kez hesaplanır ve **sabit kalır** — Exit
-   çizgisi sonradan hareket etse bile SL güncellenmez. Sadece bot
-   çökerse / bağlantı koparsa diye bir güvenlik ağıdır.
+   Bu seviye açılışta bir kez hesaplanır ve **sabit kalır**. Lose
+   exit'ten (1,5 kat) daha uzak olduğu için normal koşullarda pozisyon
+   önce lose exit'te kapanır; güvenlik SL sadece bot çökerse / bağlantı
+   koparsa diye bir güvenlik ağıdır.
 
 **Coin listesi (12):** TIA, TAO, TRUMP, ADA, WLD, ENA, INJ, APT, NEAR,
 ARB, HYPE, ATOM
@@ -100,10 +108,10 @@ değeri anlık fiyatla güncellenir).
 ## 5) Telegram
 
 **Bildirimler (otomatik):** bot başlatıldı, işlem açıldı, işlem kapandı
-(sebep: Take Profit / Trend Dönüşü / Stop Loss — kâr/zarar yüzdesi artık
-kaldıraçlı getiri değil, **ham fiyat değişim yüzdesi**), slot dolu,
-bakiye yetersiz, kaldıraç limiti aşıldı, bağlantı koptu/kuruldu, restart
-sonrası bulunan açık pozisyon.
+(sebep: Take Profit / Trend Dönüşü / Lose Exit / Stop Loss — kâr/zarar
+yüzdesi artık kaldıraçlı getiri değil, **ham fiyat değişim yüzdesi**),
+slot dolu, bakiye yetersiz, kaldıraç limiti aşıldı, bağlantı koptu/kuruldu,
+restart sonrası bulunan açık pozisyon.
 
 **Komutlar:**
 
@@ -126,6 +134,8 @@ sonrası bulunan açık pozisyon.
 - Supertrend: ATR Period **10**, Multiplier **2**
 - Entry çizgisi: **1.2** ATR | Exit çizgisi: **2.4** ATR
 - Stake: toplam varlığın **%8**'i
+- Lose exit: Entry-Exit mesafesinin **1,5 katı** (RR 1:1,5), **sabit**
+  (açılışta bir kez hesaplanır, sonra güncellenmez)
 - Güvenlik SL: Entry-Exit mesafesinin **2 katı**, **sabit** (açılışta bir
   kez hesaplanır, sonra güncellenmez)
 - Trend dönüşü kontrolü: **sadece mum kapanışında**
