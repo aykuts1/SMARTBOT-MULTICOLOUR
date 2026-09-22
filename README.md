@@ -7,7 +7,7 @@ Bybit Futures üzerinde çalışan, **Supertrend** göstergesine ve ona bağlı
 > Eski gösterge (Tilson T3, Merkez/ALMA) ve eski "lose exit" mantığı
 > tamamen kaldırıldı, yerine bu belgede anlatılan yeni strateji geldi.
 
-## 1) Kurulum
+## 1) Kurulum 
 
 ```bash
 pip install -r requirements.txt
