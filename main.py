@@ -90,9 +90,10 @@ def main():
                     # Ilk dongu - baslangic referans degeri
                     confirmed_trend[symbol] = strategy.get_confirmed_trend(df)
 
-                # Giris ve TP kontrolu: her saniye, anlik fiyatla
+                # Giris, TP ve lose exit kontrolu: her saniye, anlik fiyatla
                 strategy.check_entry(client, bot_state, symbol, df, prev_prices[symbol], last_price)
                 strategy.check_exit(client, bot_state, symbol, df, prev_prices[symbol], last_price)
+                strategy.check_lose_exit(client, bot_state, symbol, prev_prices[symbol], last_price)
 
                 # Trend donusu kontrolu: SADECE mum yeni kapandiysa
                 if candle_just_closed:
