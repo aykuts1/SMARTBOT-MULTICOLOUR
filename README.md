@@ -8,7 +8,7 @@ türlü** (Gold + Silver) bir trading botu.
 > güncellemesidir. Eskiden tek olan strateji artik **Gold işlem** oldu,
 > yanına simetrik bir **Silver işlem** eklendi.
 
-## 1) Kurulum
+## 1) Kurulum 
 
 ```bash
 pip install -r requirements.txt
