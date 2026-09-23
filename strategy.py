@@ -397,6 +397,17 @@ def check_tp_exit(client, bot_state, symbol, side, df, prev_price, last_price):
 
     if favorable:
         close_position(client, bot_state, pos, last_price, "Take Profit")
+    elif pos.trade_type == "silver":
+        # SADECE Silver'da: TP hedefine zararda degerken bile HEMEN
+        # kapatilir - "TP Lose" olarak. Gold'daki gibi gormezden gelip
+        # lose exit'i beklemek burada YAPILMAZ. Sebep: Silver'in TP
+        # hedefi (Gold cizgisi) trend uzadikca giris fiyatinin LEHTE
+        # tarafina gecebiliyor - bu da Silver'i uzun sure zararda acik
+        # tutup sonunda daha da buyuk bir lose exit zararina goturebiliyor.
+        # Gold'da bu davranis DEGISMEDI (asagidaki elif'e hic girmiyor
+        # bile - Gold icin fonksiyon burada sessizce doner, lose exit'i
+        # bekler).
+        close_position(client, bot_state, pos, last_price, "TP Lose")
 
 
 # ------------------------------------------------------------
