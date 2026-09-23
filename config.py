@@ -92,6 +92,15 @@ LOSE_EXIT_DISTANCE_MULT_SILVER = 1.0  # Silver lose exit: RR 1:1 (TP mesafesiyle
 # VE en fazla 12 short ayni anda acik olabilir (birlesik degil, ayri
 # sayaçlar) - yani teorik olarak en fazla 12+12=24 acik islem olabilir.
 MAX_POSITIONS_PER_SIDE = 12
+
+# Bybit'in USDT perpetual islemler icin platform genelindeki minimum
+# emir DEGERI (notional, qty*fiyat cinsinden - qty adedi degil). Canli
+# ortamda gozlemlenen hata mesajinin ("Order does not meet minimum
+# order value 5USDT") kendisinden alinmistir. Hesaplanan islem hacmi
+# bunun altinda kalirsa (dusuk stake/kaldirac ya da ucuz bir coin
+# yuzunden olabilir), islem acilmadan once atlanir - aksi halde borsa
+# emri reddeder ve sinyal her saniye ayni basarisiz emri tekrar dener.
+MIN_ORDER_VALUE_USDT = 5.0
 MARGIN_MODE = "REGULAR_MARGIN"
 ORDER_TYPE = "Market"
 
