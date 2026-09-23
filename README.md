@@ -8,7 +8,7 @@ türlü** (Gold + Silver) bir trading botu.
 > güncellemesidir. Eskiden tek olan strateji artik **Gold işlem** oldu,
 > yanına simetrik bir **Silver işlem** eklendi.
 
-## 1) Kurulum 
+## 1) Kurulum
 
 ```bash
 pip install -r requirements.txt
@@ -179,3 +179,11 @@ kayıtsız pozisyon.
   önlemek için var (canlıda bu yaşandı). Sonucu: eğer `/dur` gönderdiğin
   tam anda bot bir sebeple yeniden başlıyorsa, o komut atlanabilir —
   böyle bir durumda `/dur`'u tekrar göndermen yeterli.
+- Bybit'in her emir için bir **minimum emir değeri** (5 USDT) şartı var.
+  Hesaplanan işlem hacmi (özellikle düşük varlık + düşük fiyatlı bir
+  coin kombinasyonunda) bunun altında kalırsa, bot artık emri hiç
+  denemeden atlar ve "İşlem Hacmi Yetersiz" bildirimi gönderir — aksi
+  halde borsa emri reddeder ve bu da hem sürekli tekrarlanan bir hataya
+  hem de yanlışlıkla "Bağlantı Koptu" bildirimine yol açıyordu (canlıda
+  bu da yaşandı; artık emir gönderme adımları kendi hata yakalayıcısı
+  içinde izole, bir emrin reddedilmesi bağlantı sorunuyla karıştırılmıyor).
