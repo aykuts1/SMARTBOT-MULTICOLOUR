@@ -321,9 +321,11 @@ class ReportBuilder:
         insuf = len(self.state.system_events_since(window, "insufficient_balance"))
         slot_full = len(self.state.system_events_since(window, "slot_full"))
         lev_capped = len(self.state.system_events_since(window, "leverage_capped"))
+        below_min = len(self.state.system_events_since(window, "below_min_order_value"))
         parts.append(f"Bakiye yetersiz nedeniyle atlanan sinyal: {insuf}")
         parts.append(f"Slot dolu nedeniyle atlanan sinyal: {slot_full}")
         parts.append(f"Kaldıraç limiti aşılan işlem: {lev_capped}")
+        parts.append(f"Minimum emir değeri altında atlanan sinyal: {below_min}")
 
         return "\n".join(parts)
 
