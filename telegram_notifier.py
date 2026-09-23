@@ -174,6 +174,26 @@ def notify_leverage_capped(symbol: str, side: str, trade_type: str,
 
 
 # ============================================================
+# 6b) ISLEM HACMI YETERSIZ (borsanin minimum emir degerinin altinda - sinyal atlanir)
+# ============================================================
+def notify_below_min_order_value(symbol: str, side: str, trade_type: str,
+                                  position_volume: float, min_required: float):
+    yon = "Long" if side == "long" else "Short"
+    tur = _tur_etiket(trade_type)
+    text = (
+        "⚠️ *İŞLEM HACMİ YETERSİZ*\n"
+        f"Coin: {symbol.replace('USDT','')}/USDT\n"
+        f"Yön: {yon}\n"
+        f"Tür: {tur}\n"
+        f"Hesaplanan hacim: {position_volume:.2f} USDT\n"
+        f"Borsanın minimum emir değeri: {min_required:.2f} USDT\n"
+        "Durum: Sinyal atlandı, işlem açılmadı\n"
+        f"Saat: {_now_str()}"
+    )
+    send_message(text)
+
+
+# ============================================================
 # 7) BAGLANTI KOPTU / YENIDEN KURULDU
 # ============================================================
 def notify_connection_lost(last_success_str: str):
