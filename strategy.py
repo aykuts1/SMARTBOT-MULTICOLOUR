@@ -308,6 +308,18 @@ def _open_new_position(client, bot_state, symbol, side, trade_type, entry_price,
         notify.notify_leverage_capped(symbol, side, trade_type, result.calculated_leverage, max_leverage)
         bot_state.record_system_event("leverage_capped", symbol, side)
 
+    if result.position_volume < config.MIN_ORDER_VALUE_USDT:
+        # Borsanin minimum emir degerinin altinda - emir denemeden atla.
+        # (Denenirse borsa reddeder ve sinyal her saniye ayni basarisiz
+        # emri tekrar tekrar dener - canli ortamda tam olarak bu yasandi.)
+        print(f"[open_position] {symbol} {side} ({trade_type}): islem hacmi "
+              f"({result.position_volume:.2f} USDT) borsanin minimum emir degerinin "
+              f"({config.MIN_ORDER_VALUE_USDT:.2f} USDT) altinda, islem acilmiyor")
+        notify.notify_below_min_order_value(symbol, side, trade_type,
+                                             result.position_volume, config.MIN_ORDER_VALUE_USDT)
+        bot_state.record_system_event("below_min_order_value", symbol, side)
+        return
+
     qty = client.round_qty(symbol, result.qty)
     if qty <= 0:
         print(f"[open_position] {symbol} {side} ({trade_type}): hesaplanan miktar cok kucuk, islem acilmiyor")
@@ -316,9 +328,19 @@ def _open_new_position(client, bot_state, symbol, side, trade_type, entry_price,
     position_idx = 1 if side == "long" else 2
     order_side = "Buy" if side == "long" else "Sell"
 
-    client.set_leverage(symbol, result.applied_leverage)
-    client.open_market_position(symbol, order_side, qty, position_idx)
-    client.set_stop_loss(symbol, result.sl_price, position_idx)
+    # Emir gonderme adimlari kendi try/except'i icinde - close_position'daki
+    # ayni koruma buradan eksikti. Onemi: bu adim ici bir hata (ornegin
+    # borsanin ONCEDEN GORMEDIGIMIZ bir sebeple emri reddetmesi) yakalanmazsa
+    # ana donguye kadar yukselir ve orada YANLISLIKLA "baglanti koptu" olarak
+    # bildirilir - halbuki baglanti gayet saglamdir, sadece bu tek emir
+    # reddedilmistir. Canli ortamda tam olarak bu yasandi.
+    try:
+        client.set_leverage(symbol, result.applied_leverage)
+        client.open_market_position(symbol, order_side, qty, position_idx)
+        client.set_stop_loss(symbol, result.sl_price, position_idx)
+    except Exception as e:
+        print(f"[open_position] {symbol} {side} ({trade_type}) acilirken emir hatasi: {e}")
+        return
 
     pos = state_module.Position(
         symbol=symbol, side=side, position_idx=position_idx, trade_type=trade_type,
