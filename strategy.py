@@ -21,7 +21,10 @@ GOLD ISLEM (eski tek stratejinin aynisi, sadece isimler Gold/Silver oldu):
 SILVER ISLEM (yeni):
   - Giris: fiyat (saniyelik) Silver cizgisine degerse, o anki Supertrend'in
     TERSI yonunde acilir.
-  - TP hedefi: Gold cizgisi (dinamik, pozisyonun KENDI yonune gore).
+  - TP hedefi: Gold cizgisi (dinamik). Silver trendin TERSINE acildigi
+    icin, acilistaki hedefle AYNI cizgi kullanilir: long Silver icin
+    dusus tarafindaki (short_gold_line), short Silver icin yukselis
+    tarafindaki (long_gold_line) Gold cizgisi - bkz. check_tp_exit.
   - Lose exit: Gold-Silver mesafesinin 1.0 kati (RR 1:1), sabit.
   - Trend donusu cikisi YOK.
   - Guvenlik SL: mesafenin 2 kati, sabit (Gold ile AYNI carpan).
@@ -364,9 +367,22 @@ def _open_new_position(client, bot_state, symbol, side, trade_type, entry_price,
 # ------------------------------------------------------------
 def check_tp_exit(client, bot_state, symbol, side, df, prev_price, last_price):
     """Gold islem icin hedef Silver cizgisi, Silver islem icin hedef
-    Gold cizgisidir - HER IKISI DE pozisyonun KENDI yonune gore secilir
-    (o anki genel trend bayragina gore degil - bkz. indicators.py'nin
-    ustundeki aciklama)."""
+    Gold cizgisidir. Cizgi, o anki genel trend bayragina gore degil,
+    SABIT bir taraftan secilir (bkz. indicators.py'nin ustundeki
+    aciklama) - ama hangi taraf oldugu tura gore FARKLIDIR:
+
+      - GOLD trend YONUNDE acilir: long Gold yukselis tarafindaki
+        (long_*), short Gold dusus tarafindaki (short_*) cizgiyi
+        kullanir - pozisyonun kendi yonuyle ayni taraf.
+      - SILVER trendin TERSINE acilir: long Silver DUSUS trendinde
+        acildigi icin hedefi dusus tarafindaki (short_gold_line), short
+        Silver YUKSELIS trendinde acildigi icin yukselis tarafindaki
+        (long_gold_line) Gold cizgisidir - yani pozisyonun yonunun
+        TERSI taraf. Bu, acilista sizing/bildirimde kullanilan hedefle
+        (gold_line) AYNI cizgidir. Eskiden Silver de Gold gibi
+        "pozisyonun kendi yonu" tarafindan secilirdi; bu, acilistaki
+        hedefle FARKLI (yanlis taraftaki) bir cizgiye bakiyordu ve fiyat
+        biraz aleyhe gidince hemen 'TP Lose' tetikliyordu."""
     pos = bot_state.get_position(symbol, side)
     if not pos:
         return
@@ -375,7 +391,8 @@ def check_tp_exit(client, bot_state, symbol, side, df, prev_price, last_price):
     if pos.trade_type == "gold":
         target_col = "long_silver_line" if side == "long" else "short_silver_line"
     else:
-        target_col = "long_gold_line" if side == "long" else "short_gold_line"
+        # Silver: acilistaki hedefle ayni taraf (pozisyon yonunun TERSI).
+        target_col = "short_gold_line" if side == "long" else "long_gold_line"
     target_line = float(last_row[target_col])
 
     if target_line != target_line:  # NaN kontrolu
