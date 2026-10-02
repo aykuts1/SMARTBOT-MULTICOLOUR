@@ -35,7 +35,7 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 # COIN LISTESI (12 coin)
 # ============================================================
 COINS = [
-    "TIAUSDT", "TAOUSDT", "TRUMPUSDT", "ADAUSDT", "WLDUSDT", "ENAUSDT",
+    "TIAUSDT", "TAOUSDT", "ADAUSDT", "ENAUSDT",
     "INJUSDT", "APTUSDT", "NEARUSDT", "ARBUSDT", "HYPEUSDT", "ATOMUSDT",
 ]
 
