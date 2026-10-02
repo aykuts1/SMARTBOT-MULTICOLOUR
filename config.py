@@ -70,7 +70,7 @@ SILVER_LINE_ATR_MULT = 2.4   # "Silver cizgi" (eski adiyla Exit cizgisi)
 # cizgi arasi mesafe -> yuzde -> stake/yuzde*100 = hacim -> hacim/stake
 # = kaldirac. Stake ve guvenlik SL carpani ikisinde de ORTAK; sadece
 # lose exit mesafesi turlere gore farkli (asagida).
-EQUITY_PERCENT_PER_TRADE = 0.03   # stake: toplam varligin %3'u (her iki tur icin de)
+EQUITY_PERCENT_PER_TRADE = 0.025   # stake: toplam varligin %3'u (her iki tur icin de)
 SL_DISTANCE_MULT = 2.0            # guvenlik SL, giris-hedef mesafesinin kac kati uzakta (ORTAK)
 
 LOSE_EXIT_DISTANCE_MULT_GOLD = 1.0    # Gold lose exit: RR 1:1.5 (TP mesafesinin 1.5 kati)
