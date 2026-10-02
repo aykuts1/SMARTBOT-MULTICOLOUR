@@ -73,7 +73,7 @@ SILVER_LINE_ATR_MULT = 2.4   # "Silver cizgi" (eski adiyla Exit cizgisi)
 EQUITY_PERCENT_PER_TRADE = 0.03   # stake: toplam varligin %3'u (her iki tur icin de)
 SL_DISTANCE_MULT = 2.0            # guvenlik SL, giris-hedef mesafesinin kac kati uzakta (ORTAK)
 
-LOSE_EXIT_DISTANCE_MULT_GOLD = 1.5    # Gold lose exit: RR 1:1.5 (TP mesafesinin 1.5 kati)
+LOSE_EXIT_DISTANCE_MULT_GOLD = 1.0    # Gold lose exit: RR 1:1.5 (TP mesafesinin 1.5 kati)
 LOSE_EXIT_DISTANCE_MULT_SILVER = 1.0  # Silver lose exit: RR 1:1 (TP mesafesiyle ayni)
 
 # ============================================================
