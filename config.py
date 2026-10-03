@@ -49,7 +49,7 @@ KLINE_LOOKBACK = 300
 # SUPERTREND AYARLARI
 # ============================================================
 SUPERTREND_ATR_PERIOD = 10
-SUPERTREND_MULTIPLIER = 2.0
+SUPERTREND_MULTIPLIER = 3.0
 
 # Supertrend'in ana cizgisinden (up/dn), fiyata dogru kaydirilmis iki
 # cizgi. Ikisi de ayni ATR'yi (Supertrend ATR'si) kullanir.
