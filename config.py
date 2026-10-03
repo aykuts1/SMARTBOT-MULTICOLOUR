@@ -54,7 +54,7 @@ SUPERTREND_MULTIPLIER = 3.0
 # Supertrend'in ana cizgisinden (up/dn), fiyata dogru kaydirilmis iki
 # cizgi. Ikisi de ayni ATR'yi (Supertrend ATR'si) kullanir.
 GOLD_LINE_ATR_MULT = 1.2     # "Gold cizgi" (eski adiyla Entry cizgisi)
-SILVER_LINE_ATR_MULT = 2.4   # "Silver cizgi" (eski adiyla Exit cizgisi)
+SILVER_LINE_ATR_MULT = 3.0   # "Silver cizgi" (eski adiyla Exit cizgisi)
 
 # ============================================================
 # IKI ISLEM TURU: GOLD ve SILVER
