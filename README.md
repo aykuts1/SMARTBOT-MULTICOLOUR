@@ -8,7 +8,7 @@ karşı yöndeki pozisyonu kapatan bir trading botu.
 > yeni bir stratejidir. Supertrend, Gold/Silver çizgileri, TP ve trend
 > dönüşü çıkışı kaldırıldı.
 
-## 1) Kurulum
+## 1) Kurulum 
 
 ```bash
 pip install -r requirements.txt
