@@ -4,7 +4,7 @@ Bybit Futures üzerinde çalışan, **Q-Trend** göstergesinin ana çizgisi ve
 Gold/Silver çizgileri üzerinden işlem açan bot. Faytterro Bands tamamen
 kaldırıldı. BUY/SELL ve STRONG sinyalleri **kullanılmaz**.
 
-## 1) Kurulum ve çalıştırma 
+## 1) Kurulum ve çalıştırma
 
 ```bash
 pip install -r requirements.txt
@@ -41,9 +41,7 @@ kaldıracı aşılırsa max kullanılır. Hacim 5 USDT altındaysa işlem atlan�
 
 **Kurallar**
 - 40 coin taranır, her coinde aynı anda en fazla **1** işlem, toplamda en fazla **20** açık işlem (long + short birlikte).
-- Aynı mumda birden fazla işlem açılıp kapanabilir.
-- **Zararla kapanan coin** (Hareketli Zarar / Lose Exit / Stop Loss), o mum bitene
-  kadar yeni işlem açmaz. Kârla (Kâr Alma) kapanan coin beklemez.
+- Aynı mumda birden fazla işlem açılıp kapanabilir (mum başına işlem sınırı ve zarar sonrası bekleme yok).
 - Stake tablosu eskisi gibi (toplam varlığa göre, sınır değerler üst bareme girer).
 
 ## 3) `config.py` içindeki önemli ayarlar
