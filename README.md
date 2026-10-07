@@ -4,7 +4,7 @@ Bybit Futures üzerinde çalışan, **Q-Trend** göstergesinin ana çizgisi ve
 Gold/Silver çizgileri üzerinden işlem açan bot. Faytterro Bands tamamen
 kaldırıldı. BUY/SELL ve STRONG sinyalleri **kullanılmaz**.
 
-## 1) Kurulum ve çalıştırma
+## 1) Kurulum ve çalıştırma 
 
 ```bash
 pip install -r requirements.txt
