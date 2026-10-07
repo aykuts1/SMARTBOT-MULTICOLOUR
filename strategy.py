@@ -13,9 +13,8 @@ STRATEJI:
       3) Lose Exit    : acilista (giris-TP mesafesi x 1.5) ters yonde SABITLENEN seviye.
       4) Stop Loss    : borsadaki guvenlik SL'si (sabit lose exit mesafesinin 2 kati).
   - Her coinde ayni anda en fazla 1 islem; toplamda en fazla MAX_OPEN_POSITIONS.
-  - Bir coinde islem ZARARLA kapanirsa (Hareketli Zarar / Lose Exit / Stop Loss),
-    o coin icin yeni islem ancak bir sonraki mum olusunca acilir.
-  - Ayni mumda birden fazla islem acilip kapanabilir (kar alma sonrasi dahil).
+  - Ayni mumda birden fazla islem acilip kapanabilir (zararla kapanis sonrasi dahil;
+    mum basina islem siniri yok).
 
 NOT: Bu dosya Bybit'ten veri cekme/onbellekleme islerine karismaz - o is
 tamamen bybit_client.py'de.
@@ -28,9 +27,6 @@ import indicators
 import sizing
 import state as state_module
 import telegram_notifier as notify
-
-# Zararla kapanis sayilan sebepler (bu sebeplerle kapanan coin, o mumda tekrar islem acmaz)
-LOSS_REASONS = ("Hareketli Zarar", "Lose Exit", "Stop Loss")
 
 # Coin basina mum dilimi basina bir kez hesaplanan "kapanmis mum" degerleri
 _qt_cache = {}
@@ -149,7 +145,7 @@ def reconcile_with_exchange(client, bot_state):
       1) Bot'ta acik gorunen ama borsada olmayan bir pozisyon varsa,
          dis bir etkenle (gercek SL tetiklenmesi, elle kapatma vb.)
          kapandigi varsayilir - kayittan silinir ve "Stop Loss" olarak
-         islenir (zararla kapanis sayilir: coin o mumda tekrar islem acmaz).
+         islenir.
 
       2) Borsada acik olan ama bot'un bilmedigi bir pozisyon varsa,
          gereken tum hesaplamalar yapilarak kayda alinir.
@@ -182,7 +178,6 @@ def reconcile_with_exchange(client, bot_state):
             "pnl": pnl, "price_change_percent": price_change_percent, "duration_seconds": duration,
             "leverage": pos.leverage, "leverage_was_capped": pos.leverage_was_capped,
         })
-        bot_state.block_symbol(pos.symbol, client.current_bucket())
         notify.notify_position_closed(pos.symbol, pos.side, pos.entry_price,
                                        last_price, "Stop Loss", pnl, price_change_percent, duration)
 
@@ -288,10 +283,6 @@ def close_position(client, bot_state, pos, exit_price, reason) -> bool:
         "leverage": pos.leverage, "leverage_was_capped": pos.leverage_was_capped,
     })
 
-    # Zararla kapandiysa: bu coin, bu mum bitene kadar yeni islem acmaz
-    if reason in LOSS_REASONS:
-        bot_state.block_symbol(pos.symbol, client.current_bucket())
-
     notify.notify_position_closed(pos.symbol, pos.side, pos.entry_price,
                                    exit_price, reason, pnl, price_change_percent, duration)
     return True
@@ -325,18 +316,14 @@ def _try_open_position(client, bot_state, symbol, side, last_price, lv):
     if bot_state.has_any_position(symbol):
         return
 
-    # 2) Zararla kapanan coin, o mum bitene kadar bekler
-    if bot_state.is_symbol_blocked(symbol, client.current_bucket()):
-        return
-
-    # 3) Toplam acik islem limiti (long + short birlikte)
+    # 2) Toplam acik islem limiti (long + short birlikte)
     open_count = bot_state.total_open_count()
     if open_count >= config.MAX_OPEN_POSITIONS:
         notify.notify_slot_full(open_count, config.MAX_OPEN_POSITIONS, symbol, side)
         bot_state.record_system_event("slot_full", symbol, side)
         return
 
-    # 4) Acilis anindaki TP (ana cizgi) ve risk cizgisi (Silver loss / Gold loss)
+    # 3) Acilis anindaki TP (ana cizgi) ve risk cizgisi (Silver loss / Gold loss)
     tp_price = lv["m"]
     risk_line = lv["silver_loss"] if side == "long" else lv["gold_loss"]
 
