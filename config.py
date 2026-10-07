@@ -163,7 +163,6 @@ STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 TRADE_HISTORY_FILE = os.path.join(STATE_DIR, "trade_history.json")
 EQUITY_HISTORY_FILE = os.path.join(STATE_DIR, "equity_history.json")
 SYSTEM_EVENTS_FILE = os.path.join(STATE_DIR, "system_events.json")
-LOSS_BLOCKS_FILE = os.path.join(STATE_DIR, "loss_blocks.json")
 LOG_FILE = os.path.join(STATE_DIR, "bot.log")
 
 os.makedirs(STATE_DIR, exist_ok=True)
