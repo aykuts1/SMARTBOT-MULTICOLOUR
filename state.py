@@ -4,8 +4,7 @@ state.py
 ------------------
 Botun "hafizasi": su an acik olan pozisyonlar, kapanan islemlerin
 gecmisi, varlik (equity) gecmisi, sistem olaylari (bakiye yetersiz /
-slot dolu / kaldirac limiti asildi) ve "zararla kapanan coin bu mum
-icinde tekrar islem acmaz" kayitlari. Bot yeniden baslatildiginda, acik
+slot dolu / kaldirac limiti asildi) . Bot yeniden baslatildiginda, acik
 pozisyonlar borsadan okunup burada yeniden kurulur.
 
 Pozisyonlar "SYMBOL_side" anahtariyla tutulur (eski raporlarla uyum
@@ -46,11 +45,9 @@ class BotState:
         self.trade_history: list[dict] = []
         self.equity_history: list[dict] = []
         self.system_events: list[dict] = []
-        self.loss_blocks: dict[str, int] = {}       # symbol -> mum numarasi (bucket)
         self._load_trade_history()
         self._load_equity_history()
         self._load_system_events()
-        self._load_loss_blocks()
 
     # ------------------------------------------------------------
     # POZISYONLAR
@@ -82,35 +79,6 @@ class BotState:
 
     def all_positions(self):
         return list(self.positions.values())
-
-    # ------------------------------------------------------------
-    # ZARARLA KAPANAN COIN: AYNI MUM ICINDE TEKRAR ISLEM ACMA
-    # ------------------------------------------------------------
-    def block_symbol(self, symbol: str, bucket: int):
-        """Coin, 'bucket' numarali mum bitene kadar yeni islem acamaz."""
-        self.loss_blocks = {s: b for s, b in self.loss_blocks.items() if b >= bucket}
-        self.loss_blocks[symbol] = bucket
-        self._save_loss_blocks()
-
-    def is_symbol_blocked(self, symbol: str, bucket: int) -> bool:
-        return self.loss_blocks.get(symbol) == bucket
-
-    def _save_loss_blocks(self):
-        try:
-            with open(config.LOSS_BLOCKS_FILE, "w", encoding="utf-8") as f:
-                json.dump(self.loss_blocks, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[state] Zarar bekleme kaydi kaydedilemedi: {e}")
-
-    def _load_loss_blocks(self):
-        if os.path.exists(config.LOSS_BLOCKS_FILE):
-            try:
-                with open(config.LOSS_BLOCKS_FILE, "r", encoding="utf-8") as f:
-                    raw = json.load(f)
-                self.loss_blocks = {str(k): int(v) for k, v in raw.items()}
-            except Exception as e:
-                print(f"[state] Zarar bekleme kaydi okunamadi: {e}")
-                self.loss_blocks = {}
 
     # ------------------------------------------------------------
     # ISLEM GECMISI (raporlar icin)
