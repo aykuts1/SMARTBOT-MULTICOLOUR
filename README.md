@@ -20,44 +20,77 @@ karışır. Temiz başlamak için `data/` klasörünü sil.
 
 **Çizgiler** (1 saatlik mum, ATR 14, trend periyodu 200, çarpan 1.0):
 - Ana çizgi (merdiven gibi ilerler), Gold = ana + 1 ATR, Silver = ana − 1 ATR
-- Gold loss = ana + 2 ATR, Silver loss = ana − 2 ATR
+- Gold loss / Silver loss çizgileri sadece bilgi/rapor amaçlı hesaplanır, çıkışta kullanılmaz.
 
 **Giriş:** Fiyat Silver'a değerse **long**, Gold'a değerse **short**.
 
 **Çıkış (hangisi önce olursa):**
-| Çıkış | Long | Short |
-|---|---|---|
-| Kâr Alma | fiyat ana çizgiye gelince | fiyat ana çizgiye gelince |
-| Hareketli Zarar | Silver loss'a gelince | Gold loss'a gelince |
-| Lose Exit (sabit) | giriş − (TP mesafesi × 1,5) | giriş + (TP mesafesi × 1,5) |
-| Stop Loss (borsada gerçek emir) | giriş − (lose exit mesafesi × 2) | giriş + (lose exit mesafesi × 2) |
+| Çıkış | Nasıl çalışır |
+|---|---|
+| Kâr Alma | Fiyat ana çizgiye gelince bot pozisyonu kapatır. CANLI, her saniye kontrol edilir. |
+| Stop Loss | Borsada **gerçek bir emir**. Giriş ile Bybit'in verdiği **likit fiyatı** arasındaki yolun **%80'ine** konur (likitten önceki güvenlik payı %20). |
 
-TP mesafesi = açılış anında |giriş − ana çizgi|. Lose Exit ve Stop Loss açılışta
-sabitlenir. Ana çizgi, Hareketli Zarar ve Kâr Alma canlıdır (çizgiyle birlikte kayar).
+**Stop Loss nasıl çalışır**
+- Pozisyon açılınca bot Bybit'ten pozisyonun likit fiyatını okur ve stop'u
+  `giriş + (likit − giriş) × 0.8` seviyesine koyar (long'da aşağıda, short'ta yukarıda).
+- Çapraz marj kullanıldığı için likit fiyatı sürekli değişir (hesap bakiyesi ve
+  diğer açık işlemlere bağlı). Bot **her dakika** (`RECONCILE_INTERVAL_SECONDS`)
+  her pozisyonun likit fiyatını yeniden okur ve stop'u yeni seviyeye taşır.
+  Seviye değişmediyse borsaya istek atılmaz.
+- Stop, `MarkPrice` ile tetiklenir (Bybit likidasyonu da MarkPrice'a göre yapar).
+- Bot kapalıyken borsadaki stop emri yerinde kalır, ama likit fiyatı kayarsa
+  güncellenemez; ayrıca Kâr Alma da çalışmaz.
+- **Bybit likit fiyatını boş döndürürse** (ya da stop emri reddedilirse) stop
+  konamaz: pozisyon açık kalır ve Telegram'dan "STOP LOSS KONULAMADI" uyarısı gelir.
+  Aynı uyarı pozisyon başına bir kez gönderilir, bot her dakika yeniden dener.
+- Borsa stop'u tetiklediğinde kapanış sebebi "Stop Loss" olarak kaydedilir;
+  fiyat stop'a yakın değilse "Dış Kapanış" (elle kapatma) yazılır.
 
-**Kaldıraç:** Açılış anındaki Silver loss (long) / Gold loss (short) mesafesine
-göre: fiyat o çizgiye gelirse kayıp yaklaşık stake kadar olsun. Coin max
+**Stake:** Futures (UNIFIED) cüzdan bakiyesinin **%1'i** (`STAKE_PERCENT`).
+Kullanılan bakiye `totalWalletBalance`'tır: açık işlemlerdeki geçici kâr/zarar
+**dahil değildir** (sadece kapanan işlemler bakiyeyi değiştirir), ana (Funding)
+cüzdan da dahil değildir. Raporlardaki "toplam varlık" ise geçici kâr/zararı da
+içeren toplam varlıktır.
+
+**Kaldıraç:** Açılış anındaki TP mesafesine (giriş − ana çizgi) göre hesaplanır:
+fiyat TP'ye (ana çizgiye) gelirse kâr yaklaşık stake kadar olsun. Coin max
 kaldıracı aşılırsa max kullanılır. Hacim 5 USDT altındaysa işlem atlanır.
 
 **Kurallar**
-- 40 coin taranır, her coinde aynı anda en fazla **1** işlem, toplamda en fazla **20** açık işlem (long + short birlikte).
+- 50 coin taranır, her coinde aynı anda en fazla **1** işlem, toplamda en fazla **15** açık işlem (long + short birlikte).
 - Aynı mumda birden fazla işlem açılıp kapanabilir (mum başına işlem sınırı ve zarar sonrası bekleme yok).
-- Stake tablosu eskisi gibi (toplam varlığa göre, sınır değerler üst bareme girer).
 
-## 3) `config.py` içindeki önemli ayarlar
-- `COINS`: 40 coin. Bot açılırken Bybit'in canlı listesiyle karşılaştırır, bulunamayanları çıkarır ve Telegram'dan haber verir.
-- `QT_INTRABAR_STEP`: `True` = gösterge canlı mumda Pine'daki gibi davranır (varsayılan). `False` = ana çizgi sadece mum kapanınca kayar, mum içinde çizgiler sabit kalır.
-- `FIXED_LOSE_EXIT_TP_MULT = 1.5`, `SAFETY_SL_MULT = 2.0`, `MAX_OPEN_POSITIONS = 20`.
+## 3) Açık pozisyonların diske kaydı
+
+Açık her pozisyon `data/open_positions.json` dosyasına da yazılır (açılış zamanı,
+açılış anındaki TP bilgisi gibi borsadan geri okunamayan bilgiler yeniden
+başlatmada korunsun diye). Stop seviyesi ve likit fiyatı ise borsadan okunur.
+Dosyada kaydı olmayan ama borsada bulunan pozisyonlar kayda alınır, stop'ları
+ayarlanır ve Telegram'dan bildirilir.
+
+## 4) `config.py` içindeki önemli ayarlar
+- `COINS`: 50 coin. Bot açılırken Bybit'in canlı listesiyle karşılaştırır, bulunamayanları çıkarır ve Telegram'dan haber verir.
+- `STAKE_PERCENT = 1.0`, `MAX_OPEN_POSITIONS = 15`.
+- `STOP_PLACEMENT_FRACTION = 0.8`: stop'un giriş→likit yolundaki yeri.
+- `STOP_TRIGGER_BY = "MarkPrice"`.
+- `LIQ_FETCH_RETRIES`, `LIQ_FETCH_WAIT_SECONDS`: pozisyon açıldıktan sonra Bybit'in likit fiyatını vermesini beklemek için deneme sayısı ve bekleme.
+- `QT_INTRABAR_STEP`: `True` = gösterge canlı mumda Pine'daki gibi davranır (varsayılan). `False` = ana çizgi sadece mum kapanınca kayar.
 - `KLINE_LOOKBACK = 1000`: ana çizgi geçmişe bağlı olduğu için en fazla mum çekilir.
 
-## 4) Dosyalar
+## 5) Dosyalar
 `config.py`, `indicators.py` (Q-Trend), `sizing.py`, `bybit_client.py`, `state.py`,
 `strategy.py`, `telegram_notifier.py`, `telegram_bot.py`, `main.py`.
 
-## 5) Canlıya geçmeden önce
+## 6) Canlıya geçmeden önce
 - Ana çizgi grafikteki Q-Trend ile birkaç coinde karşılaştırılmalı (TradingView'ın
   geçmişi daha uzun olduğu için küçük farklar çıkabilir).
 - Düşük varlıkta BTC/ETH gibi büyük lotlu coinler minimum lot yüzünden atlanabilir
   ("MİNİMUM LOT ÇOK BÜYÜK" bildirimi).
-- Bot kapalıyken sadece borsadaki Stop Loss emri korur; Kâr Alma, Hareketli Zarar
-  ve Lose Exit botun kendisi tarafından yapılır. Botu kesintisiz bir sunucuda çalıştır.
+- **Stop Loss testnet'te mutlaka denenmeli.** Bybit'in çapraz marjda `liqPrice`
+  alanını nasıl döndürdüğü (bazı durumlarda boş olabilir) ve stop emrinin kabul
+  edilip edilmediği canlıda kontrol edilmeli.
+- Çapraz marjda zarar sadece stake ile sınırlı değildir: pozisyonun arkasında
+  futures hesabındaki tüm bakiye durur. Stop likidasyondan önce çalışacak şekilde
+  konur, ama fiyat çok hızlı hareket ederse (boşluk) stop'a rağmen likit olabilir.
+- Botu kesintisiz, güvenilir bir sunucuda çalıştır: bot kapalıyken stop seviyeleri
+  güncellenmez ve Kâr Alma çalışmaz.
