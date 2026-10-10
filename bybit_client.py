@@ -198,8 +198,25 @@ class BybitClient:
     # HESAP BILGISI
     # ------------------------------------------------------------
     def get_total_equity(self) -> float:
+        """Toplam varlik: acik islemlerdeki gecici kar/zarar DAHIL (raporlar icin)."""
         resp = self.session.get_wallet_balance(accountType="UNIFIED")
         return float(resp["result"]["list"][0]["totalEquity"])
+
+    def get_wallet_balance(self) -> float:
+        """Futures (UNIFIED) cuzdan bakiyesi: acik islemlerdeki gecici
+        kar/zarar DAHIL DEGIL, sadece kapanan islemler bunu degistirir.
+        Stake bu rakamin %1'i olarak hesaplanir. Ana (Funding) cuzdan bu
+        rakama dahil degildir."""
+        resp = self.session.get_wallet_balance(accountType="UNIFIED")
+        acc = resp["result"]["list"][0]
+        value = acc.get("totalWalletBalance")
+        if value not in (None, ""):
+            return float(value)
+        # Yedek yol: USDT coininin cuzdan bakiyesi
+        for coin in acc.get("coin", []):
+            if coin.get("coin") == "USDT":
+                return float(coin.get("walletBalance") or 0)
+        raise RuntimeError("Cuzdan bakiyesi okunamadi")
 
     def _load_instrument_info(self, symbol: str):
         resp = self.session.get_instruments_info(category="linear", symbol=symbol)
@@ -294,6 +311,30 @@ class BybitClient:
                 positions.append(p)
         return positions
 
+    def get_position_info(self, symbol: str, position_idx: int):
+        """Tek bir pozisyonun (coin + yon) borsadaki kaydini dondurur
+        (likit fiyati, stop seviyesi vs. icerir). Pozisyon yoksa None."""
+        resp = self.session.get_positions(category="linear", symbol=symbol)
+        for p in resp["result"]["list"]:
+            try:
+                size = float(p.get("size", 0) or 0)
+                idx = int(p.get("positionIdx", 0))
+            except (TypeError, ValueError):
+                continue
+            if size > 0 and idx == position_idx:
+                return p
+        return None
+
+    @staticmethod
+    def parse_price_field(value):
+        """Bybit bos / '0' dondurebilen fiyat alanlarini (liqPrice, stopLoss)
+        okur. Gecerli fiyat yoksa None dondurur."""
+        try:
+            f = float(value)
+        except (TypeError, ValueError):
+            return None
+        return f if f > 0 else None
+
     # ------------------------------------------------------------
     # EMIRLER
     # ------------------------------------------------------------
@@ -322,12 +363,14 @@ class BybitClient:
         )
 
     def set_stop_loss(self, symbol: str, sl_price: float, position_idx: int):
-        """Pozisyona bagli gercek SL emri (guvenlik agi)."""
+        """Pozisyona bagli gercek Stop Loss emri koyar ya da mevcut olani
+        yeni seviyeye tasir. Tetiklenme fiyati turu config.STOP_TRIGGER_BY
+        (Bybit likidasyonu MarkPrice'a gore yaptigi icin MarkPrice)."""
         return self.session.set_trading_stop(
             category="linear",
             symbol=symbol,
             stopLoss=self._format_price(symbol, sl_price),
             tpslMode="Full",
-            slTriggerBy="LastPrice",
+            slTriggerBy=config.STOP_TRIGGER_BY,
             positionIdx=position_idx,
         )
