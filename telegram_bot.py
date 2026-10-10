@@ -35,7 +35,7 @@ HELP_TEXT = (
     "/yardim — Bu listeyi gösterir"
 )
 
-CLOSE_REASONS = ("Kâr Alma", "Hareketli Zarar", "Lose Exit", "Stop Loss")
+CLOSE_REASONS = ("Kâr Alma", "Stop Loss", "Dış Kapanış")
 
 
 def _fmt_duration(seconds: float) -> str:
@@ -51,6 +51,10 @@ def _time_ago_str(ts: float) -> str:
     if delta < 86400:
         return f"{delta / 3600:.0f} saat önce"
     return f"{delta / 86400:.0f} gün önce"
+
+
+def _fmt_stop(value) -> str:
+    return f"{value:.4f}" if value else "yok"
 
 
 def _price_change_percent(side: str, entry_price: float, last_price: float) -> float:
@@ -356,7 +360,8 @@ class ReportBuilder:
                 f"{emoji} {coin}/USDT — {yon}\n"
                 f"Giriş: {pos.entry_price:.4f} | Anlık: {last_price:.4f} | "
                 f"K/Z: {pnl:+.2f} USDT (%{pct:+.2f} fiyat değişimi)\n"
-                f"Lose exit: {pos.lose_exit_price:.4f} | SL: {pos.sl_price:.4f} | Kaldıraç: {pos.leverage:.1f}x"
+                f"Stop: {_fmt_stop(pos.sl_price)} | Likit: {_fmt_stop(pos.liq_price)} | "
+                f"Kaldıraç: {pos.leverage:.1f}x"
             )
         return header + "\n\n" + "\n\n".join(blocks or ["(açık pozisyon yok)"])
 
@@ -448,13 +453,17 @@ class ReportBuilder:
                 dur = _fmt_duration(time.time() - pos.open_time)
                 parts.append(f"*Açık pozisyon — {yon}*")
                 parts.append(f"  Giriş: {pos.entry_price:.4f} | Anlık: {last_price:.4f} (%{pct:+.2f})")
-                if pos.opposite_band_at_entry:
-                    karsi_mesafe = (pos.opposite_band_at_entry - pos.entry_price) / pos.entry_price * 100
-                    parts.append(f"  TP / ana çizgi (açılış anı): {pos.opposite_band_at_entry:.4f} (mesafe: %{karsi_mesafe:+.2f})")
-                lose_mesafe = (pos.lose_exit_price - pos.entry_price) / pos.entry_price * 100
-                parts.append(f"  Sabit lose exit: {pos.lose_exit_price:.4f} (mesafe: %{lose_mesafe:+.2f})")
-                sl_mesafe = (pos.sl_price - pos.entry_price) / pos.entry_price * 100
-                parts.append(f"  Güvenlik SL: {pos.sl_price:.4f} (mesafe: %{sl_mesafe:+.2f})")
+                if pos.tp_price_at_entry:
+                    karsi_mesafe = (pos.tp_price_at_entry - pos.entry_price) / pos.entry_price * 100
+                    parts.append(f"  TP / ana çizgi (açılış anı): {pos.tp_price_at_entry:.4f} (mesafe: %{karsi_mesafe:+.2f})")
+                if pos.sl_price:
+                    stop_mesafe = (pos.sl_price - pos.entry_price) / pos.entry_price * 100
+                    parts.append(f"  Stop Loss (likit öncesi, borsada): {pos.sl_price:.4f} (mesafe: %{stop_mesafe:+.2f})")
+                else:
+                    parts.append("  Stop Loss: YOK (konulamadı)")
+                if pos.liq_price:
+                    liq_mesafe = (pos.liq_price - pos.entry_price) / pos.entry_price * 100
+                    parts.append(f"  Likit fiyatı: {pos.liq_price:.4f} (mesafe: %{liq_mesafe:+.2f})")
                 parts.append(
                     f"  Kaldıraç: {pos.leverage:.1f}x | Stake: {pos.allocated_amount:.2f} USDT | "
                     f"İşlem hacmi: {pos.qty * pos.entry_price:.2f} USDT"
@@ -631,7 +640,8 @@ class TelegramCommandListener:
             open_count = self.report_builder.state.total_open_count()
             send_message(
                 "🛑 *BOT DURDURULUYOR*\n"
-                f"Açık pozisyonlar: {open_count} (kapatılmıyor, olduğu gibi bırakılıyor — SL'ler borsada aktif kalır)\n"
+                f"Açık pozisyonlar: {open_count} (kapatılmıyor, olduğu gibi bırakılıyor — borsadaki Stop Loss emirleri "
+                "yerinde kalır, ama bot kapalıyken Kâr Alma çalışmaz ve stop seviyeleri güncellenmez)\n"
                 "Yeni sinyal takibi: Durduruldu\n"
                 "Veri akışı: Durduruldu\n"
                 "Durum: Bot pasif — yeniden başlatmak için sunucudan manuel çalıştırılmalı\n"
