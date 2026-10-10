@@ -4,18 +4,24 @@ state.py
 ------------------
 Botun "hafizasi": su an acik olan pozisyonlar, kapanan islemlerin
 gecmisi, varlik (equity) gecmisi, sistem olaylari (bakiye yetersiz /
-slot dolu / kaldirac limiti asildi) . Bot yeniden baslatildiginda, acik
+slot dolu / kaldirac limiti asildi). Bot yeniden baslatildiginda, acik
 pozisyonlar borsadan okunup burada yeniden kurulur.
 
+Stop Loss BORSADA gercek bir emir olarak durur (seviyesi likit fiyatina
+gore bot tarafindan her dakika guncellenir). Acik pozisyonlar yine de her
+degisiklikte diske yazilir (OPEN_POSITIONS_FILE): acilis zamani, acilis
+anindaki TP bilgisi gibi borsadan geri okunamayan bilgiler bot yeniden
+baslayinca korunsun diye.
+
 Pozisyonlar "SYMBOL_side" anahtariyla tutulur (eski raporlarla uyum
-icin). Yeni kuralda bir coinde ayni anda en fazla 1 islem acilir; bu
-kural strategy.py'de has_any_position() ile uygulanir.
+icin). Bir coinde ayni anda en fazla 1 islem acilir; bu kural
+strategy.py'de has_any_position() ile uygulanir.
 """
 
 import json
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict, fields
 from typing import Optional
 
 import config
@@ -27,14 +33,15 @@ class Position:
     side: str                  # "long" / "short"
     position_idx: int          # 1 = long, 2 = short (hedge modu)
     entry_price: float
-    sl_price: float             # guvenlik SL - acilista sabitlenir, sonra degismez
-    lose_exit_price: float      # sabit lose exit - acilista sabitlenir, sonra degismez
     leverage: float
     allocated_amount: float
     qty: float
-    band_distance_at_entry: Optional[float] = None     # acilis anindaki TP mesafesi (bilgi amacli)
-    opposite_band_at_entry: Optional[float] = None     # acilis anindaki TP (ana cizgi) degeri (bilgi amacli)
-    entry_lose_exit_percent: Optional[float] = None    # kaldirac formulune giren risk yuzdesi
+    sl_price: Optional[float] = None     # borsadaki guncel Stop Loss seviyesi (None = konamadi)
+    liq_price: Optional[float] = None    # Bybit'in verdigi son bilinen likit fiyati
+    sl_warned: bool = False              # "stop konamadi" uyarisi bu pozisyon icin zaten gonderildi mi
+    tp_distance_at_entry: Optional[float] = None       # acilis anindaki TP mesafesi (bilgi amacli)
+    tp_price_at_entry: Optional[float] = None           # acilis anindaki TP (ana cizgi) degeri (bilgi amacli)
+    entry_tp_percent: Optional[float] = None            # kaldirac formulune giren yuzde
     leverage_was_capped: bool = False
     open_time: float = field(default_factory=time.time)
 
@@ -48,6 +55,7 @@ class BotState:
         self._load_trade_history()
         self._load_equity_history()
         self._load_system_events()
+        self._load_open_positions()
 
     # ------------------------------------------------------------
     # POZISYONLAR
@@ -57,9 +65,13 @@ class BotState:
 
     def add_position(self, pos: Position):
         self.positions[self._key(pos.symbol, pos.side)] = pos
+        self._save_open_positions()
 
     def remove_position(self, symbol: str, side: str) -> Optional[Position]:
-        return self.positions.pop(self._key(symbol, side), None)
+        pos = self.positions.pop(self._key(symbol, side), None)
+        if pos is not None:
+            self._save_open_positions()
+        return pos
 
     def get_position(self, symbol: str, side: str) -> Optional[Position]:
         return self.positions.get(self._key(symbol, side))
@@ -79,6 +91,43 @@ class BotState:
 
     def all_positions(self):
         return list(self.positions.values())
+
+    def update_stop_info(self, symbol: str, side: str, sl_price: Optional[float],
+                         liq_price: Optional[float], sl_warned: Optional[bool] = None):
+        """Bir pozisyonun guncel stop / likit bilgisini kaydeder ve diske yazar."""
+        pos = self.get_position(symbol, side)
+        if pos is None:
+            return
+        pos.sl_price = sl_price
+        pos.liq_price = liq_price
+        if sl_warned is not None:
+            pos.sl_warned = sl_warned
+        self._save_open_positions()
+
+    # ------------------------------------------------------------
+    # ACIK POZISYONLARIN DISKE KAYDI
+    # ------------------------------------------------------------
+    def _save_open_positions(self):
+        try:
+            data = [asdict(p) for p in self.positions.values()]
+            with open(config.OPEN_POSITIONS_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[state] Acik pozisyonlar kaydedilemedi: {e}")
+
+    def _load_open_positions(self):
+        if os.path.exists(config.OPEN_POSITIONS_FILE):
+            try:
+                with open(config.OPEN_POSITIONS_FILE, "r", encoding="utf-8") as f:
+                    rows = json.load(f)
+                # Eski surumden kalan alanlar (ornegin lose_exit_price) yok sayilir
+                known = {f_.name for f_ in fields(Position)}
+                for row in rows:
+                    clean = {k: v for k, v in row.items() if k in known}
+                    pos = Position(**clean)
+                    self.positions[self._key(pos.symbol, pos.side)] = pos
+            except Exception as e:
+                print(f"[state] Acik pozisyonlar okunamadi: {e}")
 
     # ------------------------------------------------------------
     # ISLEM GECMISI (raporlar icin)
@@ -206,22 +255,3 @@ class BotState:
             except Exception as e:
                 print(f"[state] Sistem olaylari okunamadi: {e}")
                 self.system_events = []
-
-
-def reconstruct_lose_exit(entry_price: float, sl_price: float, side: str) -> float:
-    """Yeniden baslatmada: sabit lose exit borsada saklanan bir deger
-    degildir (sadece guvenlik SL borsada gercek bir emir olarak durur), bu
-    yuzden restart sonrasi acik bir pozisyon bulundugunda sabit lose exit
-    seviyesi guvenlik SL'den GERI HESAPLANIR.
-
-    Guvenlik SL mesafesi = sabit lose exit mesafesi x SAFETY_SL_MULT oldugu icin:
-        lose exit mesafesi = SL mesafesi / SAFETY_SL_MULT
-    (Hareketli zarar cikisi ve TP zaten canli cizgilerden hesaplandigi icin
-    restart'ta geri kurulmalarina gerek yoktur.)"""
-    if not sl_price:
-        return 0.0
-    sl_distance = abs(entry_price - sl_price)
-    lose_exit_distance = sl_distance / config.SAFETY_SL_MULT
-    if side == "long":
-        return entry_price - lose_exit_distance
-    return entry_price + lose_exit_distance
