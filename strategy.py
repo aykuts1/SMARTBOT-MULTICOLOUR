@@ -3,18 +3,20 @@
 strategy.py
 ---------------------
 Botun beyni: Q-Trend cizgileriyle giris/cikis, pozisyon acma/kapama,
-borsayla iki yonlu senkronizasyon.
+Stop Loss yonetimi, borsayla iki yonlu senkronizasyon.
 
 STRATEJI:
   - GIRIS: Fiyat Silver cizgisine degerse LONG, Gold cizgisine degerse SHORT.
   - CIKIS (hangisi once olursa):
-      1) Kar Alma     : ana cizgi (TP) - canli, ana cizgiyle birlikte kayar.
-      2) Hareketli Zarar: long'da Silver loss, short'ta Gold loss - canli.
-      3) Lose Exit    : acilista (giris-TP mesafesi x 1.5) ters yonde SABITLENEN seviye.
-      4) Stop Loss    : borsadaki guvenlik SL'si (sabit lose exit mesafesinin 2 kati).
+      1) Kar Alma : ana cizgi (TP) - CANLI, anlik fiyatla her saniye kontrol edilir.
+      2) Stop Loss: borsada GERCEK bir emir. Seviyesi, giris ile Bybit'in
+         verdigi LIKIT fiyati arasi mesafenin %80'indedir
+         (config.STOP_PLACEMENT_FRACTION). Capraz marjda likit fiyati
+         degistigi icin bot, her dakika (reconcile ile birlikte) stop'u
+         yeni seviyeye tasir. Likit fiyati bos gelirse stop konamaz ve
+         Telegram'dan uyari gider (pozisyon acik kalir).
   - Her coinde ayni anda en fazla 1 islem; toplamda en fazla MAX_OPEN_POSITIONS.
-  - Ayni mumda birden fazla islem acilip kapanabilir (zararla kapanis sonrasi dahil;
-    mum basina islem siniri yok).
+  - Ayni mumda birden fazla islem acilip kapanabilir (mum basina islem siniri yok).
 
 NOT: Bu dosya Bybit'ten veri cekme/onbellekleme islerine karismaz - o is
 tamamen bybit_client.py'de.
@@ -34,10 +36,12 @@ _warned_no_data = set()
 
 
 def get_available_margin(client, bot_state):
-    """Toplam varlik - su an acik pozisyonlar icin ayrilmis miktarlar."""
-    equity = client.get_total_equity()
+    """(bos marj, cuzdan bakiyesi): cuzdan bakiyesi - su an acik pozisyonlar
+    icin ayrilmis stake'ler. Bakiye, acik islemlerdeki gecici kar/zarari
+    icermez (bkz. bybit_client.get_wallet_balance)."""
+    balance = client.get_wallet_balance()
     used = sum(p.allocated_amount for p in bot_state.all_positions())
-    return equity - used, equity
+    return balance - used, balance
 
 
 def compute_indicators_for_symbol(client, symbol):
@@ -78,6 +82,114 @@ def _get_base(client, symbol):
 
 
 # ------------------------------------------------------------
+# STOP LOSS (likit fiyatina gore)
+# ------------------------------------------------------------
+def compute_stop_price(side: str, entry_price: float, liq_price: float):
+    """Giris ile likit fiyati arasi mesafenin STOP_PLACEMENT_FRACTION'i
+    (varsayilan %80) kadar girisin likit tarafina ilerleyen seviye.
+      long  : giris > stop > likit
+      short : giris < stop < likit
+    Likit fiyati girisin yanlis tarafindaysa (veri tutarsiz) None dondurur."""
+    if not entry_price or not liq_price:
+        return None
+    if side == "long" and not (0 < liq_price < entry_price):
+        return None
+    if side == "short" and not (liq_price > entry_price):
+        return None
+    return entry_price + (liq_price - entry_price) * config.STOP_PLACEMENT_FRACTION
+
+
+def _warn_stop_failed(bot_state, pos, reason: str):
+    """Stop konamadi / guncellenemedi uyarisini pozisyon basina BIR kez gonderir
+    (her dakika ayni mesaj tekrarlanmasin diye)."""
+    if pos.sl_warned:
+        return
+    notify.notify_stop_failed(pos.symbol, pos.side, reason)
+    bot_state.update_stop_info(pos.symbol, pos.side, pos.sl_price, pos.liq_price, sl_warned=True)
+
+
+def sync_stop_for_position(client, bot_state, pos, exch_pos) -> bool:
+    """Tek bir pozisyonun Stop Loss'unu, borsadaki guncel likit fiyatina gore
+    gerekiyorsa yeni seviyeye tasir. exch_pos: borsadan gelen pozisyon kaydi
+    (liqPrice, stopLoss, avgPrice icerir). Basarili / degisiklik gerekmiyorsa
+    True, stop konamadiysa False doner."""
+    liq = client.parse_price_field(exch_pos.get("liqPrice"))
+    cur_sl = client.parse_price_field(exch_pos.get("stopLoss"))
+    entry = client.parse_price_field(exch_pos.get("avgPrice")) or pos.entry_price
+
+    if liq is None:
+        bot_state.update_stop_info(pos.symbol, pos.side, cur_sl, None)
+        _warn_stop_failed(bot_state, pos,
+                          "Bybit likit fiyatini vermedi, stop seviyesi hesaplanamadi")
+        return False
+
+    target = compute_stop_price(pos.side, entry, liq)
+    if target is None:
+        bot_state.update_stop_info(pos.symbol, pos.side, cur_sl, liq)
+        _warn_stop_failed(bot_state, pos,
+                          f"Likit fiyati ({liq}) giris fiyatina ({entry}) gore tutarsiz")
+        return False
+
+    target = float(client._format_price(pos.symbol, target))
+    tick = client.get_tick_size(pos.symbol)
+
+    # Borsadaki stop zaten istenen seviyedeyse (tick'in yarisindan az fark) dokunma
+    if cur_sl is not None and abs(cur_sl - target) < max(tick, 1e-12) * 0.5:
+        bot_state.update_stop_info(pos.symbol, pos.side, cur_sl, liq, sl_warned=False)
+        return True
+
+    try:
+        client.set_stop_loss(pos.symbol, target, pos.position_idx)
+    except Exception as e:
+        msg = str(e)
+        if "not modified" in msg.lower() or "34040" in msg:
+            # Bybit: stop zaten bu seviyede - zararsiz
+            bot_state.update_stop_info(pos.symbol, pos.side, target, liq, sl_warned=False)
+            return True
+        print(f"[stop] {pos.symbol} {pos.side} stop ayarlanamadi: {e}")
+        bot_state.update_stop_info(pos.symbol, pos.side, cur_sl, liq)
+        _warn_stop_failed(bot_state, pos, f"Borsa stop emrini kabul etmedi: {msg[:200]}")
+        return False
+
+    bot_state.update_stop_info(pos.symbol, pos.side, target, liq, sl_warned=False)
+    return True
+
+
+def sync_stops(client, bot_state, exchange_by_key: dict):
+    """Bot'un takip ettigi ve borsada da acik olan tum pozisyonlarin stop
+    seviyesini gunceller. Tek pozisyondaki hata digerlerini durdurmaz."""
+    for pos in list(bot_state.all_positions()):
+        exch_pos = exchange_by_key.get((pos.symbol, pos.side))
+        if exch_pos is None:
+            continue
+        try:
+            sync_stop_for_position(client, bot_state, pos, exch_pos)
+        except Exception as e:
+            print(f"[stop] {pos.symbol} {pos.side} stop senkronizasyon hatasi: {e}")
+
+
+def _place_initial_stop(client, bot_state, pos):
+    """Pozisyon yeni acildiktan sonra borsadan likit fiyatini okuyup ilk
+    stop'u koyar. Bybit likit fiyatini hemen vermeyebilir, bu yuzden birkac
+    kez denenir."""
+    exch_pos = None
+    for _ in range(config.LIQ_FETCH_RETRIES):
+        try:
+            exch_pos = client.get_position_info(pos.symbol, pos.position_idx)
+        except Exception as e:
+            print(f"[stop] {pos.symbol} {pos.side} pozisyon bilgisi okunamadi: {e}")
+            exch_pos = None
+        if exch_pos is not None and client.parse_price_field(exch_pos.get("liqPrice")) is not None:
+            break
+        time.sleep(config.LIQ_FETCH_WAIT_SECONDS)
+
+    if exch_pos is None:
+        _warn_stop_failed(bot_state, pos, "Pozisyon borsadan okunamadi, stop konamadi")
+        return
+    sync_stop_for_position(client, bot_state, pos, exch_pos)
+
+
+# ------------------------------------------------------------
 # YENIDEN BASLATMA / SENKRONIZASYON ORTAK YARDIMCILARI
 # ------------------------------------------------------------
 def _exchange_positions_by_key(client) -> dict:
@@ -100,59 +212,84 @@ def _exchange_positions_by_key(client) -> dict:
     return by_key
 
 
-def _build_position_from_exchange(p: dict):
+def _build_position_from_exchange(client, p: dict):
     """Tek bir borsa pozisyon kaydindan (get_open_positions sonucu) bir
-    Position nesnesi olusturur. Guvenlik SL borsadan dogrudan okunur;
-    sabit lose exit bu SL'den GERI HESAPLANIR."""
+    Position nesnesi olusturur. Stop ve likit bilgisi borsadan okunur;
+    stop sonradan sync_stops ile likit fiyatina gore ayarlanir."""
     symbol = p["symbol"]
     pos_idx = int(p.get("positionIdx", 0))
     side = "long" if pos_idx == 1 else "short"
     entry_price = float(p["avgPrice"])
     qty = float(p["size"])
     leverage = float(p.get("leverage", 0) or 0)
-    sl_price = float(p.get("stopLoss") or 0)
-
-    lose_exit_price = state_module.reconstruct_lose_exit(entry_price, sl_price, side)
     allocated_amount = (entry_price * qty) / leverage if leverage else 0.0
 
     return state_module.Position(
         symbol=symbol, side=side, position_idx=pos_idx,
-        entry_price=entry_price, sl_price=sl_price, lose_exit_price=lose_exit_price,
+        entry_price=entry_price,
         leverage=leverage, allocated_amount=allocated_amount, qty=qty,
+        sl_price=client.parse_price_field(p.get("stopLoss")),
+        liq_price=client.parse_price_field(p.get("liqPrice")),
     )
 
 
 def reconcile_open_positions(client, bot_state):
-    """Bot baslarken (main.py) bir kez cagrilir - borsadaki tum acik
-    pozisyonlari bastan takibe alir."""
-    for (symbol, side), p in _exchange_positions_by_key(client).items():
-        pos = _build_position_from_exchange(p)
-        if pos.sl_price <= 0:
-            print(f"[reconcile] {symbol} {side}: SL bulunamadi, sadece giris takip edilecek")
-        bot_state.add_position(pos)
+    """Bot baslarken (main.py) bir kez cagrilir. Diskten (state.py) yuklenmis
+    pozisyonlar korunur; diskte olmayip borsada bulunanlar kayda alinir.
+    Sonra tum pozisyonlarin stop'u likit fiyatina gore ayarlanir."""
+    exchange_by_key = _exchange_positions_by_key(client)
+
+    for (symbol, side), p in exchange_by_key.items():
+        if not bot_state.has_position(symbol, side):
+            bot_state.add_position(_build_position_from_exchange(client, p))
+
+    # Bot'ta (diskte) kayitli olup artik borsada olmayan pozisyonlar
+    # (bot kapaliyken kapanmis olabilir) - kayittan temizle.
+    for pos in list(bot_state.all_positions()):
+        if (pos.symbol, pos.side) not in exchange_by_key:
+            print(f"[reconcile] {pos.symbol} {pos.side}: bot kapaliyken borsada kapanmis, kayittan siliniyor")
+            bot_state.remove_position(pos.symbol, pos.side)
+
+    sync_stops(client, bot_state, exchange_by_key)
+
+    for pos in bot_state.all_positions():
         notify.notify_position_found_on_restart(
-            symbol, side, pos.entry_price, pos.sl_price, pos.lose_exit_price, pos.leverage)
+            pos.symbol, pos.side, pos.entry_price, pos.sl_price, pos.leverage)
 
 
 # ------------------------------------------------------------
 # IKI YONLU RECONCILE (bot calisirken periyodik olarak cagrilir)
 # ------------------------------------------------------------
+def _classify_external_close(pos, last_price):
+    """Borsada kapanmis (bot kapatmamis) bir pozisyonun sebebini ve cikis
+    fiyatini tahmin eder: fiyat bizim stop seviyemizin ustundeyse/altindaysa
+    borsadaki Stop Loss tetiklenmistir, degilse disaridan (elle) kapatilmistir."""
+    if pos.sl_price:
+        if pos.side == "long" and last_price <= pos.sl_price * 1.001:
+            return "Stop Loss", pos.sl_price
+        if pos.side == "short" and last_price >= pos.sl_price * 0.999:
+            return "Stop Loss", pos.sl_price
+    return "Dış Kapanış", last_price
+
+
 def reconcile_with_exchange(client, bot_state):
     """main.py icinde RECONCILE_INTERVAL_SECONDS'ta (varsayilan 60sn)
     bir cagrilir. Botun kendi acik pozisyon kayitlarini borsayla IKI
     YONLU karsilastirir:
 
-      1) Bot'ta acik gorunen ama borsada olmayan bir pozisyon varsa,
-         dis bir etkenle (gercek SL tetiklenmesi, elle kapatma vb.)
-         kapandigi varsayilir - kayittan silinir ve "Stop Loss" olarak
-         islenir.
+      1) Bot'ta acik gorunen ama borsada olmayan bir pozisyon varsa
+         kapanmis demektir: fiyat stop seviyesindeyse "Stop Loss", degilse
+         "Dış Kapanış" olarak islenir.
 
-      2) Borsada acik olan ama bot'un bilmedigi bir pozisyon varsa,
-         gereken tum hesaplamalar yapilarak kayda alinir.
+      2) Borsada acik olan ama bot'un bilmedigi bir pozisyon varsa kayda
+         alinir ve uyari gonderilir.
+
+      3) Tum acik pozisyonlarin Stop Loss'u, Bybit'in guncel likit fiyatina
+         gore yeniden hesaplanip gerekiyorsa yeni seviyeye tasinir.
     """
     exchange_by_key = _exchange_positions_by_key(client)
 
-    # 1) Bot'ta var, borsada yok -> disaridan kapanmis, kayittan sil
+    # 1) Bot'ta var, borsada yok -> kapanmis, kayittan sil
     for pos in list(bot_state.all_positions()):
         key = (pos.symbol, pos.side)
         if key in exchange_by_key:
@@ -161,35 +298,44 @@ def reconcile_with_exchange(client, bot_state):
         try:
             last_price = client.get_last_price(pos.symbol)
         except Exception:
-            last_price = pos.sl_price
+            last_price = pos.entry_price
+
+        reason, exit_price = _classify_external_close(pos, last_price)
 
         if pos.side == "long":
-            pnl = (last_price - pos.entry_price) * pos.qty
-            price_change_percent = (last_price - pos.entry_price) / pos.entry_price * 100
+            pnl = (exit_price - pos.entry_price) * pos.qty
+            price_change_percent = (exit_price - pos.entry_price) / pos.entry_price * 100
         else:
-            pnl = (pos.entry_price - last_price) * pos.qty
-            price_change_percent = (pos.entry_price - last_price) / pos.entry_price * 100
+            pnl = (pos.entry_price - exit_price) * pos.qty
+            price_change_percent = (pos.entry_price - exit_price) / pos.entry_price * 100
         duration = time.time() - pos.open_time
 
         bot_state.remove_position(pos.symbol, pos.side)
         bot_state.record_closed_trade({
             "symbol": pos.symbol, "side": pos.side,
-            "entry_price": pos.entry_price, "exit_price": last_price, "reason": "Stop Loss",
+            "entry_price": pos.entry_price, "exit_price": exit_price, "reason": reason,
             "pnl": pnl, "price_change_percent": price_change_percent, "duration_seconds": duration,
             "leverage": pos.leverage, "leverage_was_capped": pos.leverage_was_capped,
         })
         notify.notify_position_closed(pos.symbol, pos.side, pos.entry_price,
-                                       last_price, "Stop Loss", pnl, price_change_percent, duration)
+                                       exit_price, reason, pnl, price_change_percent, duration)
 
-    # 2) Borsada var, bot'ta yok -> hesaplamalarini yapip kayda al
+    # 2) Borsada var, bot'ta yok -> kayda al
+    newly_synced = []
     for (symbol, side), p in exchange_by_key.items():
         if bot_state.has_position(symbol, side):
             continue
-
-        pos = _build_position_from_exchange(p)
+        pos = _build_position_from_exchange(client, p)
         bot_state.add_position(pos)
+        newly_synced.append(pos)
+
+    # 3) Tum pozisyonlarin stop'unu likit fiyatina gore guncelle
+    sync_stops(client, bot_state, exchange_by_key)
+
+    for pos in newly_synced:
+        cur = bot_state.get_position(pos.symbol, pos.side) or pos
         notify.notify_position_synced_from_exchange(
-            symbol, side, pos.entry_price, pos.sl_price, pos.lose_exit_price, pos.leverage)
+            cur.symbol, cur.side, cur.entry_price, cur.sl_price, cur.leverage)
 
 
 # ------------------------------------------------------------
@@ -202,7 +348,7 @@ def process_symbol(client, bot_state, symbol, prev_price, last_price):
 
     lv = indicators.live_levels(base["m_prev"], base["atr_prev"], last_price)
 
-    # Once cikislar (pozisyon yoksa fonksiyonlar kendiliginden bir sey yapmaz)
+    # Once cikis (pozisyon yoksa fonksiyon kendiliginden bir sey yapmaz)
     for side in ("long", "short"):
         check_exits(client, bot_state, symbol, side, last_price, lv)
 
@@ -214,46 +360,22 @@ def process_symbol(client, bot_state, symbol, prev_price, last_price):
 
 
 # ------------------------------------------------------------
-# CIKIS KONTROLU (her saniye, anlik fiyatla)
+# CIKIS KONTROLU
 # ------------------------------------------------------------
 def check_exits(client, bot_state, symbol, side, last_price, lv):
-    """Long icin:
-         fiyat >= ana cizgi                      -> Kar Alma
-         fiyat <= Silver loss (canli)            -> Hareketli Zarar
-         fiyat <= sabit lose exit                -> Lose Exit
-       Short icin ayni sey aynadan (Gold loss, yukari).
-       Zarar tarafinda birden fazla seviye asilmissa fiyatin ONCE ulastigi
-       (girise en yakin) seviyenin adi sebep olarak yazilir."""
+    """Kar Alma: CANLI, her saniye kontrol edilir (fiyat >= ana cizgi
+    long'da, fiyat <= ana cizgi short'ta). Zarar tarafini borsadaki Stop
+    Loss emri korur (bkz. sync_stop_for_position)."""
     pos = bot_state.get_position(symbol, side)
     if not pos:
         return
 
-    reason = None
     if side == "long":
         if last_price >= lv["m"]:
-            reason = "Kâr Alma"
-        else:
-            hits = []
-            if last_price <= lv["silver_loss"]:
-                hits.append((lv["silver_loss"], "Hareketli Zarar"))
-            if pos.lose_exit_price and last_price <= pos.lose_exit_price:
-                hits.append((pos.lose_exit_price, "Lose Exit"))
-            if hits:
-                reason = max(hits)[1]
+            close_position(client, bot_state, pos, last_price, "Kâr Alma")
     else:
         if last_price <= lv["m"]:
-            reason = "Kâr Alma"
-        else:
-            hits = []
-            if last_price >= lv["gold_loss"]:
-                hits.append((lv["gold_loss"], "Hareketli Zarar"))
-            if pos.lose_exit_price and last_price >= pos.lose_exit_price:
-                hits.append((pos.lose_exit_price, "Lose Exit"))
-            if hits:
-                reason = min(hits)[1]
-
-    if reason:
-        close_position(client, bot_state, pos, last_price, reason)
+            close_position(client, bot_state, pos, last_price, "Kâr Alma")
 
 
 def close_position(client, bot_state, pos, exit_price, reason) -> bool:
@@ -323,25 +445,24 @@ def _try_open_position(client, bot_state, symbol, side, last_price, lv):
         bot_state.record_system_event("slot_full", symbol, side)
         return
 
-    # 3) Acilis anindaki TP (ana cizgi) ve risk cizgisi (Silver loss / Gold loss)
+    # 3) Acilis anindaki TP (ana cizgi)
     tp_price = lv["m"]
-    risk_line = lv["silver_loss"] if side == "long" else lv["gold_loss"]
 
-    _open_new_position(client, bot_state, symbol, side, last_price, tp_price, risk_line)
+    _open_new_position(client, bot_state, symbol, side, last_price, tp_price)
 
 
-def _open_new_position(client, bot_state, symbol, side, entry_price, tp_price, risk_line_price):
-    available_margin, equity = get_available_margin(client, bot_state)
+def _open_new_position(client, bot_state, symbol, side, entry_price, tp_price):
+    available_margin, wallet_balance = get_available_margin(client, bot_state)
     max_leverage = client.get_max_leverage(symbol)
 
     result = sizing.calculate_position(
         side=side, entry_price=entry_price, tp_price=tp_price,
-        risk_line_price=risk_line_price,
-        total_equity=equity, max_leverage_for_coin=max_leverage,
+        wallet_balance=wallet_balance, max_leverage_for_coin=max_leverage,
     )
 
     if result is None:
-        print(f"[open_position] {symbol} {side}: gecersiz mesafe (TP/risk cizgisi yonu uymuyor), islem acilmiyor")
+        print(f"[open_position] {symbol} {side}: gecersiz mesafe veya bakiye "
+              "(TP yonu uymuyor / stake hesaplanamadi), islem acilmiyor")
         return
 
     if result.allocated_amount > available_margin:
@@ -392,34 +513,24 @@ def _open_new_position(client, bot_state, symbol, side, entry_price, tp_price, r
         print(f"[open_position] {symbol} {side} acilirken emir hatasi: {e}")
         return
 
-    # Pozisyon ACILDI. Guvenlik SL'si basarisiz olursa pozisyon yine de
-    # kayda alinir (bot onu sabit lose exit ile takip eder) ve uyari gider.
-    sl_ok = False
-    for attempt in range(2):
-        try:
-            client.set_stop_loss(symbol, result.sl_price, position_idx)
-            sl_ok = True
-            break
-        except Exception as e:
-            print(f"[open_position] {symbol} {side} SL konulamadi (deneme {attempt + 1}): {e}")
-            time.sleep(0.5)
-
     pos = state_module.Position(
         symbol=symbol, side=side, position_idx=position_idx,
-        entry_price=entry_price, sl_price=result.sl_price, lose_exit_price=result.lose_exit_price,
+        entry_price=entry_price,
         leverage=result.applied_leverage, allocated_amount=result.allocated_amount, qty=qty,
-        band_distance_at_entry=result.tp_distance,
-        opposite_band_at_entry=result.tp_price,
-        entry_lose_exit_percent=result.risk_percent,
+        tp_distance_at_entry=result.tp_distance,
+        tp_price_at_entry=result.tp_price,
+        entry_tp_percent=result.tp_percent,
         leverage_was_capped=result.leverage_was_capped,
     )
     bot_state.add_position(pos)
 
-    if not sl_ok:
-        notify.notify_stop_loss_failed(symbol, side, result.sl_price)
+    # Pozisyon ACILDI: Bybit'ten likit fiyatini okuyup borsaya Stop Loss koy.
+    # (Konamazsa uyari gider, pozisyon acik kalir.)
+    _place_initial_stop(client, bot_state, pos)
+    pos = bot_state.get_position(symbol, side) or pos
 
     notify.notify_position_opened(
-        symbol, side, entry_price, result.tp_price, result.risk_line_price,
-        result.lose_exit_price, result.sl_price, result.applied_leverage,
+        symbol, side, entry_price, result.tp_price,
+        pos.sl_price, pos.liq_price, result.applied_leverage,
         result.allocated_amount, result.position_volume,
     )
