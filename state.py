@@ -43,6 +43,9 @@ class Position:
     tp_price_at_entry: Optional[float] = None           # acilis anindaki TP (ana cizgi) degeri (bilgi amacli)
     entry_tp_percent: Optional[float] = None            # kaldirac formulune giren yuzde
     leverage_was_capped: bool = False
+    lose_exit_price: Optional[float] = None    # Lose Exit seviyesi (long: acilistaki Silver, short: acilistaki Gold) - sabit
+    lose_exit_estimated: bool = False          # True = borsadan sonradan kaydedildi, seviye tahmini
+    last_checked_bucket: Optional[int] = None  # Lose Exit en son hangi mum diliminde kontrol edildi
     open_time: float = field(default_factory=time.time)
 
 
@@ -104,6 +107,14 @@ class BotState:
             pos.sl_warned = sl_warned
         self._save_open_positions()
 
+    def mark_bucket_checked(self, symbol: str, side: str, bucket: int):
+        """Lose Exit kontrolunun bu mum diliminde yapildigini kaydeder."""
+        pos = self.get_position(symbol, side)
+        if pos is None:
+            return
+        pos.last_checked_bucket = bucket
+        self._save_open_positions()
+
     # ------------------------------------------------------------
     # ACIK POZISYONLARIN DISKE KAYDI
     # ------------------------------------------------------------
@@ -120,7 +131,7 @@ class BotState:
             try:
                 with open(config.OPEN_POSITIONS_FILE, "r", encoding="utf-8") as f:
                     rows = json.load(f)
-                # Eski surumden kalan alanlar (ornegin lose_exit_price) yok sayilir
+                # Bilinmeyen alanlar yok sayilir
                 known = {f_.name for f_ in fields(Position)}
                 for row in rows:
                     clean = {k: v for k, v in row.items() if k in known}
