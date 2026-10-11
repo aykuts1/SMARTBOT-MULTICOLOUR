@@ -8,13 +8,18 @@ API anahtarlari ve Telegram bilgileri .env dosyasindan okunur (guvenlik
 icin kod icine yazilmaz). .env.example dosyasini kopyalayip .env yap ve
 kendi bilgilerini gir.
 
-STRATEJI: Q-Trend (ana cizgi + Gold/Silver).
-  - Fiyat Silver'a degerse LONG, Gold'a degerse SHORT.
-  - Kar Alma: ana cizgi (canli, her saniye kontrol edilir).
-  - Stop Loss: pozisyon acilinca borsaya GERCEK bir SL emri konur. Seviyesi,
-    giris ile Bybit'in verdigi LIKIT fiyati arasindaki yolun %80'indedir
-    (likitten onceki guvenlik cizgisi). Likit fiyati degistikce (capraz
-    marj) bot, her dakika stop'u yeni seviyeye tasir.
+STRATEJI: Q-Trend (ana cizgi + Gold/Silver), Gold/Silver 2 ATR uzakta.
+  - GIRIS: Fiyat ana (merkez) cizgiye degince islem acilir. Cizgi YESIL ise
+    LONG, KIRMIZI ise SHORT (cizgi rengi = Pine'daki ls: son sinyal "B" ise yesil).
+  - Kar Alma: LONG icin Gold cizgisi, SHORT icin Silver cizgisi. DINAMIK
+    (cizgi kaydikca hedef de kayar), canli, her saniye kontrol edilir.
+  - Lose Exit: acilis anindaki Silver (long) / Gold (short) degeri alinir ve
+    sabit kalir. 1 saatlik mum KAPANISINDA bu seviyenin ters tarafinda
+    kapanmissa islem zararla kapatilir (acilis mumunun kapanisi dahil).
+  - Stop Loss: borsada GERCEK bir emir. Seviyesi, giris ile Bybit'in verdigi
+    LIKIT fiyati arasindaki yolun %80'indedir. Likit fiyati degistikce (capraz
+    marj) bot, her dakika stop'u yeni seviyeye tasir. Likit fiyati bos
+    gelirse stop konamaz ve Telegram'dan uyari gider.
   - Stake: futures cuzdan bakiyesinin %1'i (acik islemlerdeki gecici
     kar/zarar sayilmaz, sadece kapanan islemler bakiyeyi degistirir).
 """
@@ -38,29 +43,16 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # ============================================================
-# COIN LISTESI (50 coin taranir)
+# COIN LISTESI (20 coin taranir)
 # ============================================================
 # Bot acilirken bu isimleri Bybit'in canli listesiyle karsilastirir;
 # Bybit'te bulunmayan / islem gormeyen sembolleri listeden cikarir ve
 # Telegram'dan haber verir (bkz. main.py).
 COINS = [
-    # ilk 12
-    "TIAUSDT", "TAOUSDT", "ADAUSDT", "ENAUSDT",
-    "INJUSDT", "APTUSDT", "NEARUSDT", "ARBUSDT", "HYPEUSDT", "ATOMUSDT",
-    "TRUMPUSDT", "WLDUSDT",
-    # hacmi yuksek 17
-    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT", "BNBUSDT",
-    "SUIUSDT", "LINKUSDT", "AVAXUSDT", "LTCUSDT", "BCHUSDT", "DOTUSDT",
-    "AAVEUSDT", "ONDOUSDT", "OPUSDT", "FARTCOINUSDT", "TRXUSDT",
-    # ek 9
-    "TONUSDT", "HBARUSDT", "UNIUSDT", "FILUSDT", "ETCUSDT",
-    "WIFUSDT", "PENGUUSDT", "SEIUSDT", "RENDERUSDT",
-    # ek 2
-    "XLMUSDT", "POLUSDT",
-    # kullanicinin ekledigi 5
-    "CHZUSDT", "1000PEPEUSDT", "SHIB1000USDT", "ZECUSDT", "AKEUSDT",
-    # ek 5
-    "ICPUSDT", "FETUSDT", "STXUSDT", "LDOUSDT", "JUPUSDT",
+    "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "SUIUSDT",
+    "ARBUSDT", "NEARUSDT", "ADAUSDT", "AAVEUSDT", "AVAXUSDT",
+    "APTUSDT", "TRUMPUSDT", "ENAUSDT", "TIAUSDT", "TAOUSDT",
+    "HYPEUSDT", "ATOMUSDT", "WLDUSDT", "INJUSDT", "CHZUSDT",
 ]
 
 # ============================================================
@@ -71,19 +63,19 @@ KLINE_INTERVAL = "60"       # 1 saatlik mum (dakika cinsinden)
 # degere olabildigince yaklasmak icin Bybit'in izin verdigi en fazla mum
 # (1000) cekilir.
 KLINE_LOOKBACK = 1000
-KLINE_FETCH_WORKERS = 8     # saat basinda 50 coinin mumunu paralel cekmek icin
+KLINE_FETCH_WORKERS = 8     # saat basinda 20 coinin mumunu paralel cekmek icin
 
 # ============================================================
 # Q-TREND AYARLARI (Pine kodundaki varsayilanlarla ayni)
 # ============================================================
 QT_TREND_PERIOD = 200       # "Trend period"
 QT_ATR_PERIOD = 14          # "ATR Period"
-QT_ATR_MULT = 1.0           # "ATR Multiplier" (ana cizginin basamak buyuklugu)
+QT_ATR_MULT = 2.0           # "ATR Multiplier" (ana cizginin basamak buyuklugu) - 2 ATR
 
-GOLD_MULT = 1.0             # Gold cizgisi   = ana cizgi + GOLD_MULT   x ATR
-SILVER_MULT = 1.0           # Silver cizgisi = ana cizgi - SILVER_MULT x ATR
-GOLD_LOSS_MULT = 2.0        # Gold loss      = ana cizgi + GOLD_LOSS_MULT   x ATR (sadece bilgi/rapor amacli)
-SILVER_LOSS_MULT = 2.0      # Silver loss    = ana cizgi - SILVER_LOSS_MULT x ATR (sadece bilgi/rapor amacli)
+GOLD_MULT = 2.0             # Gold cizgisi   = ana cizgi + GOLD_MULT   x ATR (2 ATR)
+SILVER_MULT = 2.0           # Silver cizgisi = ana cizgi - SILVER_MULT x ATR (2 ATR)
+GOLD_LOSS_MULT = 4.0        # Gold loss      = ana cizgi + GOLD_LOSS_MULT   x ATR (sadece bilgi/rapor amacli)
+SILVER_LOSS_MULT = 4.0      # Silver loss    = ana cizgi - SILVER_LOSS_MULT x ATR (sadece bilgi/rapor amacli)
 
 # True : Pine gostergesi canli mumda nasil davraniyorsa aynen oyle (ana cizgi
 #        mum icinde, anlik fiyata gore bir basamak oynayabilir; "repaint").
@@ -93,6 +85,10 @@ QT_INTRABAR_STEP = True
 # ============================================================
 # CIKIS / RISK AYARLARI
 # ============================================================
+# Lose Exit icin carpan yok: seviye, acilis anindaki Silver (long) / Gold
+# (short) cizgisinin degeridir ve sabit kalir. SADECE 1 saatlik mum
+# KAPANISINDA kontrol edilir (acilis mumunun kapanisi dahil).
+
 # Stake: futures (UNIFIED) cuzdan bakiyesinin yuzde kaci her islemde
 # kullanilsin. Bakiye = totalWalletBalance: acik islemlerdeki gecici kar/zarar
 # DAHIL DEGIL, ana (Funding) cuzdan DAHIL DEGIL.
