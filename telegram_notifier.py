@@ -65,10 +65,14 @@ def notify_symbols_missing(missing: list):
 # ============================================================
 def notify_position_opened(symbol: str, side: str, entry_price: float,
                             tp_price: float, sl_price, liq_price,
-                            leverage: float, allocated_amount: float, volume: float):
+                            leverage: float, allocated_amount: float, volume: float,
+                            lose_exit_price=None):
     yon = "LONG" if side == "long" else "SHORT"
     emoji = "🔵" if side == "long" else "🔴"
-    giris_cizgisi = "Silver çizgisine" if side == "long" else "Gold çizgisine"
+    renk = "yeşil" if side == "long" else "kırmızı"
+    tp_adi = "Gold" if side == "long" else "Silver"
+    lose_satiri = (f"Lose Exit (mum kapanışı, sabit): {lose_exit_price:.6g} USDT\n"
+                   if lose_exit_price else "")
     if sl_price:
         stop_satiri = f"Stop Loss (likit öncesi, borsada): {sl_price:.6g} USDT\n"
     else:
@@ -77,9 +81,10 @@ def notify_position_opened(symbol: str, side: str, entry_price: float,
     text = (
         f"{emoji} *İŞLEM AÇILDI — {yon}*\n"
         f"Coin: {symbol.replace('USDT','')}/USDT\n"
-        f"Sebep: Fiyat {giris_cizgisi} değdi\n"
+        f"Sebep: Fiyat ana çizgiye değdi (çizgi {renk})\n"
         f"Giriş fiyatı: {entry_price:.6g} USDT\n"
-        f"TP (ana çizgi, açılış anı): {tp_price:.6g} USDT\n"
+        f"TP ({tp_adi} çizgisi, açılış anı — canlı takip edilir): {tp_price:.6g} USDT\n"
+        f"{lose_satiri}"
         f"{stop_satiri}"
         f"{liq_satiri}"
         f"Stake: {allocated_amount:.2f} USDT\n"
@@ -91,7 +96,7 @@ def notify_position_opened(symbol: str, side: str, entry_price: float,
 
 
 # ============================================================
-# 3) ISLEM CIKISI  (sebep: "Kâr Alma" / "Stop Loss" / "Dış Kapanış")
+# 3) ISLEM CIKISI  (sebep: "Kâr Alma" / "Lose Exit" / "Stop Loss" / "Dış Kapanış")
 # ============================================================
 def notify_position_closed(symbol: str, side: str, entry_price: float,
                             exit_price: float, reason: str, pnl: float,
@@ -243,16 +248,26 @@ def notify_stop_failed(symbol: str, side: str, reason: str):
 # ============================================================
 # 8) YENIDEN BASLATILDI - ACIK POZISYON BULUNDU
 # ============================================================
+def _lose_exit_line(price, estimated) -> str:
+    if not price:
+        return "Lose Exit: belirlenemedi (sadece Stop Loss ve Kâr Alma çalışır)\n"
+    note = " (TAHMİNİ — gerçek açılış değeri bilinmiyor, şu anki çizgiden alındı)" if estimated else ""
+    return f"Lose Exit (mum kapanışı): {price:.6g} USDT{note}\n"
+
+
 def notify_position_found_on_restart(symbol: str, side: str, entry_price: float,
-                                      sl_price, leverage: float):
+                                      sl_price, leverage: float,
+                                      lose_exit_price=None, lose_exit_estimated=False):
     yon = "Short" if side == "short" else "Long"
     stop = f"{sl_price:.6g} USDT" if sl_price else "YOK (konulamadı)"
+    lose = _lose_exit_line(lose_exit_price, lose_exit_estimated)
     text = (
         "🔄 *AÇIK POZİSYON BULUNDU — TAKİBE ALINDI*\n"
         f"Coin: {symbol.replace('USDT','')}/USDT\n"
         f"Yön: {yon}\n"
         f"Giriş fiyatı: {entry_price:.6g} USDT\n"
         f"Stop Loss: {stop}\n"
+        f"{lose}"
         f"Kaldıraç: {leverage:.1f}x\n"
         f"Saat: {_now_str()}"
     )
@@ -263,18 +278,21 @@ def notify_position_found_on_restart(symbol: str, side: str, entry_price: float,
 # 9) BOT CALISIRKEN - BORSADA BULUNAN, KAYITLI OLMAYAN POZISYON
 # ============================================================
 def notify_position_synced_from_exchange(symbol: str, side: str, entry_price: float,
-                                          sl_price, leverage: float):
+                                          sl_price, leverage: float,
+                                          lose_exit_price=None, lose_exit_estimated=False):
     """Restart'tan farkli olarak: bot ZATEN CALISIRKEN, dakikalik
     reconcile sirasinda borsada bulunan ama bot'un kendi kayitlarinda
     olmayan bir pozisyon icin gonderilir."""
     yon = "Short" if side == "short" else "Long"
     stop = f"{sl_price:.6g} USDT" if sl_price else "YOK (konulamadı)"
+    lose = _lose_exit_line(lose_exit_price, lose_exit_estimated)
     text = (
         "⚠️ *BORSADA BULUNAN POZİSYON KAYDA ALINDI*\n"
         f"Coin: {symbol.replace('USDT','')}/USDT\n"
         f"Yön: {yon}\n"
         f"Giriş fiyatı: {entry_price:.6g} USDT\n"
         f"Stop Loss: {stop}\n"
+        f"{lose}"
         f"Kaldıraç: {leverage:.1f}x\n"
         "Not: Bu pozisyon botun kendi kayıtlarında yoktu - elle açılmış "
         "olabilir ya da bot bir aksama sonucu kaçırmış olabilir, kontrol etmen iyi olur.\n"
