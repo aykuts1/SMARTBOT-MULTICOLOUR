@@ -6,10 +6,14 @@ Botun beyni: Q-Trend cizgileriyle giris/cikis, pozisyon acma/kapama,
 Stop Loss yonetimi, borsayla iki yonlu senkronizasyon.
 
 STRATEJI:
-  - GIRIS: Fiyat Silver cizgisine degerse LONG, Gold cizgisine degerse SHORT.
+  - GIRIS: Fiyat ANA (orta) cizgiye degince; cizgi YESIL ise LONG, KIRMIZI ise SHORT.
   - CIKIS (hangisi once olursa):
-      1) Kar Alma : ana cizgi (TP) - CANLI, anlik fiyatla her saniye kontrol edilir.
-      2) Stop Loss: borsada GERCEK bir emir. Seviyesi, giris ile Bybit'in
+      1) Kar Alma (dinamik, CANLI): long'da fiyat Gold cizgisine, short'ta
+         Silver cizgisine ulasinca. Hedef cizgi hareket ettikce hedef de kayar.
+      2) Lose Exit: long'da ACILIS ANINDAKI Silver degeri (short'ta Gold) sabit
+         kalir; 1 saatlik mum bu seviyenin ALTINDA (short'ta USTUNDE) KAPANIRSA
+         pozisyon zararla kapatilir. Acilis mumunun kapanisi da dahildir.
+      3) Stop Loss: borsada GERCEK bir emir. Seviyesi, giris ile Bybit'in
          verdigi LIKIT fiyati arasi mesafenin %80'indedir
          (config.STOP_PLACEMENT_FRACTION). Capraz marjda likit fiyati
          degistigi icin bot, her dakika (reconcile ile birlikte) stop'u
@@ -55,7 +59,7 @@ def compute_indicators_for_symbol(client, symbol):
 # Q-TREND TABAN DEGERLERI (mum basina bir kez)
 # ------------------------------------------------------------
 def _get_base(client, symbol):
-    """(base, taze_mi) dondurur. base: {'bucket','m_prev','atr_prev'}.
+    """(base, taze_mi) dondurur. base: {'bucket','m_prev','atr_prev','ls_prev'}.
     Yeni mum dilimi icin veri henuz hazir degilse eski taban (varsa)
     dondurulur ve taze_mi=False olur: bu durumda sadece CIKIS kontrolu
     yapilir, yeni giris acilmaz."""
@@ -73,7 +77,8 @@ def _get_base(client, symbol):
                 _warned_no_data.add(symbol)
                 print(f"[strategy] {symbol}: Q-Trend icin yeterli mum verisi yok, coin atlaniyor")
             return None, False
-        base = {"bucket": bucket, "m_prev": st["m_prev"], "atr_prev": st["atr_prev"]}
+        base = {"bucket": bucket, "m_prev": st["m_prev"], "atr_prev": st["atr_prev"],
+                "ls_prev": st.get("ls_prev", "")}
         _qt_cache[symbol] = base
         _warned_no_data.discard(symbol)
         return base, True
@@ -212,6 +217,24 @@ def _exchange_positions_by_key(client) -> dict:
     return by_key
 
 
+def _estimate_lose_exit(client, symbol, side):
+    """Botun kaydinda olmayan (borsadan sonradan kaydedilen) pozisyon icin
+    Lose Exit seviyesini TAHMIN eder: kayit anindaki Silver (long) / Gold (short).
+    (Gercek acilis anindaki deger bilinemez.) Hesaplanamazsa (None, None)."""
+    try:
+        base, _ = _get_base(client, symbol)
+        if base is None:
+            return None, None
+        price = client.get_last_price(symbol)
+        lv = indicators.live_levels(base["m_prev"], base["atr_prev"], price,
+                                    base.get("ls_prev", ""))
+        level = lv["silver"] if side == "long" else lv["gold"]
+        return level, client.current_bucket()
+    except Exception as e:
+        print(f"[strategy] {symbol} {side}: Lose Exit tahmin edilemedi: {e}")
+        return None, None
+
+
 def _build_position_from_exchange(client, p: dict):
     """Tek bir borsa pozisyon kaydindan (get_open_positions sonucu) bir
     Position nesnesi olusturur. Stop ve likit bilgisi borsadan okunur;
@@ -224,12 +247,17 @@ def _build_position_from_exchange(client, p: dict):
     leverage = float(p.get("leverage", 0) or 0)
     allocated_amount = (entry_price * qty) / leverage if leverage else 0.0
 
+    lose_exit, bucket = _estimate_lose_exit(client, symbol, side)
+
     return state_module.Position(
         symbol=symbol, side=side, position_idx=pos_idx,
         entry_price=entry_price,
         leverage=leverage, allocated_amount=allocated_amount, qty=qty,
         sl_price=client.parse_price_field(p.get("stopLoss")),
         liq_price=client.parse_price_field(p.get("liqPrice")),
+        lose_exit_price=lose_exit,
+        lose_exit_estimated=lose_exit is not None,
+        last_checked_bucket=bucket,
     )
 
 
@@ -254,7 +282,8 @@ def reconcile_open_positions(client, bot_state):
 
     for pos in bot_state.all_positions():
         notify.notify_position_found_on_restart(
-            pos.symbol, pos.side, pos.entry_price, pos.sl_price, pos.leverage)
+            pos.symbol, pos.side, pos.entry_price, pos.sl_price, pos.leverage,
+            pos.lose_exit_price, pos.lose_exit_estimated)
 
 
 # ------------------------------------------------------------
@@ -335,7 +364,8 @@ def reconcile_with_exchange(client, bot_state):
     for pos in newly_synced:
         cur = bot_state.get_position(pos.symbol, pos.side) or pos
         notify.notify_position_synced_from_exchange(
-            cur.symbol, cur.side, cur.entry_price, cur.sl_price, cur.leverage)
+            cur.symbol, cur.side, cur.entry_price, cur.sl_price, cur.leverage,
+            cur.lose_exit_price, cur.lose_exit_estimated)
 
 
 # ------------------------------------------------------------
@@ -346,7 +376,8 @@ def process_symbol(client, bot_state, symbol, prev_price, last_price):
     if base is None:
         return
 
-    lv = indicators.live_levels(base["m_prev"], base["atr_prev"], last_price)
+    ls_prev = base.get("ls_prev", "")
+    lv = indicators.live_levels(base["m_prev"], base["atr_prev"], last_price, ls_prev)
 
     # Once cikis (pozisyon yoksa fonksiyon kendiliginden bir sey yapmaz)
     for side in ("long", "short"):
@@ -356,26 +387,53 @@ def process_symbol(client, bot_state, symbol, prev_price, last_price):
     if not fresh:
         return
 
-    check_entry_signals(client, bot_state, symbol, prev_price, last_price, lv)
+    check_entry_signals(client, bot_state, symbol, prev_price, last_price, lv, base)
 
 
 # ------------------------------------------------------------
 # CIKIS KONTROLU
 # ------------------------------------------------------------
 def check_exits(client, bot_state, symbol, side, last_price, lv):
-    """Kar Alma: CANLI, her saniye kontrol edilir (fiyat >= ana cizgi
-    long'da, fiyat <= ana cizgi short'ta). Zarar tarafini borsadaki Stop
-    Loss emri korur (bkz. sync_stop_for_position)."""
+    """1) Kar Alma (dinamik, CANLI): long'da fiyat >= Gold, short'ta fiyat <=
+    Silver (cizgiler anlik degeriyle). 2) Lose Exit: mum kapanisinda. Zarar
+    tarafini ayrica borsadaki Stop Loss emri korur."""
     pos = bot_state.get_position(symbol, side)
     if not pos:
         return
 
     if side == "long":
-        if last_price >= lv["m"]:
+        if last_price >= lv["gold"]:
             close_position(client, bot_state, pos, last_price, "Kâr Alma")
+            return
     else:
-        if last_price <= lv["m"]:
+        if last_price <= lv["silver"]:
             close_position(client, bot_state, pos, last_price, "Kâr Alma")
+            return
+
+    check_lose_exit(client, bot_state, pos, last_price)
+
+
+def check_lose_exit(client, bot_state, pos, last_price):
+    """Her yeni 1 saatlik mum diliminde BIR kez: az once kapanan mumun
+    kapanisi Lose Exit seviyesinin ters tarafindaysa pozisyonu kapatir.
+    long : kapanis < seviye ;  short : kapanis > seviye"""
+    if pos.lose_exit_price is None:
+        return
+    bucket = client.current_bucket()
+    if pos.last_checked_bucket == bucket:
+        return
+
+    df = client.get_cached_klines(pos.symbol)
+    if df is None or len(df) < 2:
+        return  # yeni mumun verisi henuz hazir degil, sonraki saniye tekrar denenir
+
+    closed_close = float(df.iloc[-2]["close"])
+    bot_state.mark_bucket_checked(pos.symbol, pos.side, bucket)
+
+    if pos.side == "long" and closed_close < pos.lose_exit_price:
+        close_position(client, bot_state, pos, last_price, "Lose Exit")
+    elif pos.side == "short" and closed_close > pos.lose_exit_price:
+        close_position(client, bot_state, pos, last_price, "Lose Exit")
 
 
 def close_position(client, bot_state, pos, exit_price, reason) -> bool:
@@ -413,24 +471,26 @@ def close_position(client, bot_state, pos, exit_price, reason) -> bool:
 # ------------------------------------------------------------
 # GIRIS SINYALI (her saniye, anlik fiyatla)
 # ------------------------------------------------------------
-def check_entry_signals(client, bot_state, symbol, prev_price, last_price, lv):
-    """Fiyat Silver/Gold cizgisine degdi mi (iki poll arasinda gecti mi)?
-      Silver'a degdi -> LONG ;  Gold'a degdi -> SHORT
-    Cizgi degeri olarak ANLIK (canli) cizgi kullanilir; boylece cizginin
-    kendisi kayarken (yeni mum / basamak) sahte 'degme' uretilmez, sadece
-    FIYATIN hareketiyle cizgiye ulasmasi sayilir."""
+def check_entry_signals(client, bot_state, symbol, prev_price, last_price, lv, base):
+    """Fiyat ANA cizgiye degdi mi (iki poll arasinda gecti mi)?
+    Cizgi YESIL -> LONG ; KIRMIZI -> SHORT.
+    Sahte 'degme'yi onlemek icin: cizginin degeri onceki saniyede de ayniysa
+    sayilir (canli modda cizgi fiyatla birlikte basamak atlayabilir; bu atlama
+    bir 'degme' degildir)."""
     if prev_price is None:
         return
+    if lv["ls"] not in ("B", "S"):
+        return  # henuz renk (yon) belli degil
 
-    silver = lv["silver"]
-    gold = lv["gold"]
-    touched_silver = (prev_price - silver) * (last_price - silver) <= 0
-    touched_gold = (prev_price - gold) * (last_price - gold) <= 0
+    lv_prev = indicators.live_levels(base["m_prev"], base["atr_prev"], prev_price,
+                                     base.get("ls_prev", ""))
+    m = lv["m"]
+    if abs(lv_prev["m"] - m) > 1e-12 * max(1.0, abs(m)):
+        return  # cizgi bu saniye kaydi
 
-    if touched_silver:
-        _try_open_position(client, bot_state, symbol, "long", last_price, lv)
-    elif touched_gold:
-        _try_open_position(client, bot_state, symbol, "short", last_price, lv)
+    if (prev_price - m) * (last_price - m) <= 0:
+        side = "long" if lv["ls"] == "B" else "short"
+        _try_open_position(client, bot_state, symbol, side, last_price, lv)
 
 
 def _try_open_position(client, bot_state, symbol, side, last_price, lv):
@@ -445,13 +505,17 @@ def _try_open_position(client, bot_state, symbol, side, last_price, lv):
         bot_state.record_system_event("slot_full", symbol, side)
         return
 
-    # 3) Acilis anindaki TP (ana cizgi)
-    tp_price = lv["m"]
+    # 3) Acilis anindaki TP (long: Gold, short: Silver) ve Lose Exit seviyesi
+    #    (long: Silver, short: Gold - acilis anindaki deger, sonra sabit)
+    if side == "long":
+        tp_price, lose_exit = lv["gold"], lv["silver"]
+    else:
+        tp_price, lose_exit = lv["silver"], lv["gold"]
 
-    _open_new_position(client, bot_state, symbol, side, last_price, tp_price)
+    _open_new_position(client, bot_state, symbol, side, last_price, tp_price, lose_exit)
 
 
-def _open_new_position(client, bot_state, symbol, side, entry_price, tp_price):
+def _open_new_position(client, bot_state, symbol, side, entry_price, tp_price, lose_exit):
     available_margin, wallet_balance = get_available_margin(client, bot_state)
     max_leverage = client.get_max_leverage(symbol)
 
@@ -521,6 +585,10 @@ def _open_new_position(client, bot_state, symbol, side, entry_price, tp_price):
         tp_price_at_entry=result.tp_price,
         entry_tp_percent=result.tp_percent,
         leverage_was_capped=result.leverage_was_capped,
+        lose_exit_price=lose_exit,
+        # Acilis mumunun kapanisi da kontrol edilsin: ilk kontrol bir sonraki
+        # mum diliminde yapilir (o zaman iloc[-2] = acilis mumu)
+        last_checked_bucket=client.current_bucket(),
     )
     bot_state.add_position(pos)
 
@@ -532,5 +600,5 @@ def _open_new_position(client, bot_state, symbol, side, entry_price, tp_price):
     notify.notify_position_opened(
         symbol, side, entry_price, result.tp_price,
         pos.sl_price, pos.liq_price, result.applied_leverage,
-        result.allocated_amount, result.position_volume,
+        result.allocated_amount, result.position_volume, lose_exit,
     )
